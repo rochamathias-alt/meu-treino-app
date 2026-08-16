@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+<title>Meu Treino & Dieta</title>
+<meta name="theme-color" content="#2a78d6" />
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icons/icon-192.png" />
+<link rel="icon" href="icons/icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Treino" />
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --surface-page: #f9f9f7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #898781;
+    --border: rgba(11,11,11,0.10);
+    --gridline: #e1e0d9;
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --good: #0ca30c;
+    --radius: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --surface-1: #1a1a19;
+      --surface-page: #0d0d0d;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #898781;
+      --border: rgba(255,255,255,0.10);
+      --gridline: #2c2c2a;
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --good: #0ca30c;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--surface-page);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    padding-bottom: calc(72px + env(safe-area-inset-bottom));
+    padding-top: env(safe-area-inset-top);
+    min-height: 100vh;
+  }
+  #app {
+    max-width: 560px;
+    margin: 0 auto;
+    padding: 16px;
+  }
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin-bottom: 14px;
+  }
+  .card.highlight {
+    border-color: var(--series-1);
+  }
+  h2 { margin: 0 0 4px; font-size: 1.3rem; }
+  h3 { margin: 0 0 10px; font-size: 1.05rem; }
+  .muted { color: var(--text-secondary); }
+  .muted.small { font-size: 0.82rem; color: var(--text-muted); }
+  .big { font-size: 1.4rem; font-weight: 600; margin: 4px 0; }
+
+  label { display: block; margin: 10px 0 4px; font-size: 0.85rem; color: var(--text-secondary); }
+  input, select {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--surface-page);
+    color: var(--text-primary);
+    font-size: 1rem;
+  }
+  .grid4 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+  .btn {
+    display: inline-block;
+    margin-top: 12px;
+    padding: 12px 18px;
+    border: none;
+    border-radius: 10px;
+    background: var(--series-1);
+    color: #fff;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    width: 100%;
+  }
+  .btn.secondary { background: var(--surface-page); color: var(--series-1); border: 1px solid var(--series-1); }
+  .btn.danger { background: #d03b3b; }
+
+  .progress-bar {
+    height: 10px;
+    background: var(--gridline);
+    border-radius: 6px;
+    overflow: hidden;
+    margin: 8px 0;
+  }
+  .progress-fill { height: 100%; background: var(--series-1); border-radius: 6px; transition: width .3s; }
+
+  .macro-row { display: flex; gap: 12px; flex-wrap: wrap; font-size: 0.88rem; color: var(--text-secondary); margin-top: 4px; }
+
+  .ex-list { margin: 6px 0 0; padding-left: 18px; }
+  .ex-list li { margin-bottom: 4px; }
+
+  .food-results { max-height: 220px; overflow-y: auto; margin-top: 8px; border-radius: 10px; }
+  .food-result-item {
+    padding: 10px 8px;
+    border-bottom: 1px solid var(--gridline);
+    cursor: pointer;
+  }
+  .food-result-item:hover { background: var(--surface-page); }
+  #food-add-form { margin-top: 10px; }
+  #food-add-form.hidden { display: none; }
+  .hidden { display: none; }
+
+  details { margin-bottom: 8px; border-bottom: 1px solid var(--gridline); padding-bottom: 8px; }
+  summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
+
+  .custom-food-details { margin-top: 14px; border-top: 1px solid var(--gridline); padding-top: 10px; }
+
+  .meal-list { list-style: none; margin: 0; padding: 0; }
+  .meal-list li {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--gridline);
+    gap: 8px;
+  }
+  .meal-kcal { display: flex; align-items: center; gap: 8px; font-weight: 600; white-space: nowrap; }
+  .icon-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 1rem;
+    cursor: pointer;
+    padding: 4px;
+  }
+
+  .log-exercise { margin-bottom: 14px; }
+  .sets-row { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+  .set-input { display: flex; gap: 8px; }
+  .set-input input { flex: 1; }
+
+  .legend { display: flex; gap: 16px; margin-top: 8px; font-size: 0.85rem; color: var(--text-secondary); }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-item i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+  canvas { width: 100%; height: 220px; display: block; }
+
+  nav.tabbar {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    display: flex;
+    background: var(--surface-1);
+    border-top: 1px solid var(--border);
+    padding-bottom: env(safe-area-inset-bottom);
+    z-index: 10;
+  }
+  .tab-btn {
+    flex: 1;
+    background: none;
+    border: none;
+    padding: 10px 4px 8px;
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    cursor: pointer;
+  }
+  .tab-btn .ico { font-size: 1.25rem; }
+  .tab-btn.active { color: var(--series-1); }
+</style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <nav class="tabbar">
+    <button class="tab-btn active" data-tab="inicio"><span class="ico">🏠</span>Início</button>
+    <button class="tab-btn" data-tab="alimentacao"><span class="ico">🍽️</span>Dieta</button>
+    <button class="tab-btn" data-tab="treino"><span class="ico">💪</span>Treino</button>
+    <button class="tab-btn" data-tab="progresso"><span class="ico">📈</span>Progresso</button>
+    <button class="tab-btn" data-tab="perfil"><span class="ico">⚙️</span>Perfil</button>
+  </nav>
+
+  <script src="foods.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
