@@ -158,6 +158,28 @@
   .set-input { display: flex; gap: 8px; }
   .set-input input { flex: 1; }
 
+  .video-link { margin-left: 6px; color: var(--series-1); text-decoration: none; font-size: 0.85em; white-space: nowrap; }
+  .video-link:hover { text-decoration: underline; }
+  .last-load { font-size: 0.8rem; color: var(--text-muted); margin: 2px 0 4px; }
+  .trend-up { color: var(--good); font-weight: 600; }
+  .trend-down { color: #d03b3b; font-weight: 600; }
+
+  .weekday-picker { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 4px; }
+  .weekday-picker label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin: 0;
+    font-size: 0.82rem;
+    color: var(--text-primary);
+    background: var(--surface-page);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 10px;
+    cursor: pointer;
+  }
+  .weekday-picker input { width: auto; }
+
   .legend { display: flex; gap: 16px; margin-top: 8px; font-size: 0.85rem; color: var(--text-secondary); }
   .legend-item { display: flex; align-items: center; gap: 6px; }
   .legend-item i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }

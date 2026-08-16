@@ -33,6 +33,7 @@ function defaultState() {
         goal: "bulk", // bulk | cut | manter
         startDate: todayISO(),
         durationWeeks: 12,
+        trainingDays: ["segunda", "terca", "quarta", "quinta", "sexta"],
         template: null, // preenchido ao criar
       },
     ],
@@ -52,6 +53,16 @@ function loadState() {
     if (!state.activePhaseId && state.phases && state.phases.length) {
       state.activePhaseId = state.phases[0].id;
     }
+    let migrated = false;
+    (state.phases || []).forEach((ph) => {
+      if (!ph.trainingDays) {
+        // Migração: fases antigas treinavam segunda-a-sábado. Passa a excluir o sábado por padrão.
+        ph.trainingDays = ["segunda", "terca", "quarta", "quinta", "sexta"];
+        ph.template = generateSplit(ph.focus, ph.goal, ph.trainingDays);
+        migrated = true;
+      }
+    });
+    if (migrated) saveState(state);
     return state;
   } catch (e) {
     console.error("Erro ao carregar estado, recriando.", e);
@@ -61,7 +72,7 @@ function loadState() {
 
 function initFirstRun() {
   const state = defaultState();
-  state.phases[0].template = generateSplit(state.phases[0].focus, state.phases[0].goal);
+  state.phases[0].template = generateSplit(state.phases[0].focus, state.phases[0].goal, state.phases[0].trainingDays);
   state.activePhaseId = state.phases[0].id;
   saveState(state);
   return state;
@@ -245,23 +256,29 @@ const FOCUS_LABELS = {
   fullbody: "Corpo inteiro",
 };
 
-// Gera um split segunda-a-sexta com ênfase no grupo escolhido, + full body no sábado + cardio.
-function generateSplit(focus, goal) {
+const DEFAULT_TRAINING_DAYS = ["segunda", "terca", "quarta", "quinta", "sexta"];
+
+// Distribui os grupos musculares apenas pelos dias escolhidos pelo usuário (dias fora
+// da lista viram descanso). Domingo, quando incluído, vira cardio (fase cut) ou full body.
+function generateSplit(focus, goal, trainingDays) {
+  const days = trainingDays && trainingDays.length ? trainingDays : DEFAULT_TRAINING_DAYS;
   const secondaryOrder = ["peito", "costas", "ombro", "pernas"].filter((f) => f !== focus);
-  const week = {
-    segunda: EXERCISE_LIB[focus],
-    terca: EXERCISE_LIB[secondaryOrder[0]],
-    quarta: EXERCISE_LIB[secondaryOrder[1]],
-    quinta: EXERCISE_LIB[focus],
-    sexta: EXERCISE_LIB[secondaryOrder[2]] || EXERCISE_LIB.fullbody,
-    sabado: EXERCISE_LIB.fullbody,
-    domingo: goal === "cut" ? EXERCISE_LIB.cardio : [],
-  };
-  if (goal === "cut") {
-    // adiciona corrida extra durante a semana em fase de definição
-    week.terca = [...week.terca, ...EXERCISE_LIB.cardio];
-    week.quinta = [...week.quinta, ...EXERCISE_LIB.cardio];
-  }
+  const pattern = [focus, secondaryOrder[0], secondaryOrder[1], focus, secondaryOrder[2], "fullbody"];
+  const week = {};
+  let patternIdx = 0;
+  WEEKDAYS.forEach(({ key: dayKey }) => {
+    if (!days.includes(dayKey)) {
+      week[dayKey] = [];
+      return;
+    }
+    if (dayKey === "domingo") {
+      week[dayKey] = goal === "cut" ? EXERCISE_LIB.cardio : EXERCISE_LIB.fullbody;
+      return;
+    }
+    const group = pattern[patternIdx % pattern.length];
+    week[dayKey] = EXERCISE_LIB[group];
+    patternIdx += 1;
+  });
   return week;
 }
 
@@ -290,6 +307,44 @@ function totalVolumeForLog(log) {
     (sum, ex) => sum + ex.sets.reduce((s, set) => s + (Number(set.reps) || 0) * (Number(set.weight) || 0), 0),
     0
   );
+}
+
+function videoSearchUrl(exerciseName) {
+  return `https://www.youtube.com/results?search_query=${encodeURIComponent(exerciseName + " execução técnica")}`;
+}
+
+function allLoggedExerciseNames() {
+  const set = new Set();
+  STATE.workoutLogs.forEach((l) => l.exercises.forEach((e) => set.add(e.name)));
+  return Array.from(set).sort();
+}
+
+function lastLoggedSetsForExercise(name) {
+  const logs = STATE.workoutLogs
+    .filter((l) => l.exercises.some((e) => e.name === name))
+    .sort((a, b) => b.date.localeCompare(a.date));
+  if (!logs.length) return null;
+  const ex = logs[0].exercises.find((e) => e.name === name);
+  return ex ? ex.sets : null;
+}
+
+// Maior peso do dia para o exercício, por data — últimas 12 sessões registradas.
+function maxWeightSeriesForExercise(name) {
+  const byDate = {};
+  STATE.workoutLogs
+    .filter((l) => l.exercises.some((e) => e.name === name))
+    .forEach((l) => {
+      l.exercises
+        .filter((e) => e.name === name)
+        .forEach((e) => {
+          const maxW = Math.max(0, ...e.sets.map((s) => Number(s.weight) || 0));
+          if (byDate[l.date] === undefined || maxW > byDate[l.date]) byDate[l.date] = maxW;
+        });
+    });
+  return Object.entries(byDate)
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .slice(-12)
+    .map(([date, weight]) => ({ date, weight }));
 }
 
 /* =======================================================================
@@ -389,7 +444,12 @@ function renderInicio() {
       <p class="muted">${phase.name}</p>
       ${
         todaysWorkout.length
-          ? `<ul class="ex-list">${todaysWorkout.map((e) => `<li>${escapeHtml(e.name)} — ${e.sets}x${e.reps}</li>`).join("")}</ul>`
+          ? `<ul class="ex-list">${todaysWorkout
+              .map(
+                (e) =>
+                  `<li>${escapeHtml(e.name)} — ${e.sets}x${e.reps} <a class="video-link" href="${videoSearchUrl(e.name)}" target="_blank" rel="noopener">▶️ Vídeo</a></li>`
+              )
+              .join("")}</ul>`
           : `<p class="muted">Descanso hoje 🙌</p>`
       }
       <button class="btn" data-goto="treino">Ir para Treino</button>
@@ -485,6 +545,15 @@ function renderTreino() {
           .join("")}
       </select>
       <p class="muted">${FOCUS_LABELS[phase.focus] || phase.focus} · objetivo: ${goalLabel(phase.goal)} · ${phase.durationWeeks} semanas</p>
+
+      <label>Dias de treino</label>
+      <div class="weekday-picker">
+        ${WEEKDAYS.map(
+          (w) => `
+          <label><input type="checkbox" name="training-day" value="${w.key}" ${(phase.trainingDays || []).includes(w.key) ? "checked" : ""} /> ${w.label}</label>`
+        ).join("")}
+      </div>
+
       <button class="btn secondary" id="btn-new-phase">+ Nova fase</button>
     </section>
 
@@ -497,7 +566,12 @@ function renderTreino() {
           <summary>${w.label}${w.key === wk ? " (hoje)" : ""}</summary>
           ${
             exs.length
-              ? `<ul class="ex-list">${exs.map((e) => `<li>${escapeHtml(e.name)} — ${e.sets}x${e.reps}</li>`).join("")}</ul>`
+              ? `<ul class="ex-list">${exs
+                  .map(
+                    (e) =>
+                      `<li>${escapeHtml(e.name)} — ${e.sets}x${e.reps} <a class="video-link" href="${videoSearchUrl(e.name)}" target="_blank" rel="noopener">▶️ Vídeo</a></li>`
+                  )
+                  .join("")}</ul>`
               : `<p class="muted">Descanso</p>`
           }
         </details>`;
@@ -508,23 +582,27 @@ function renderTreino() {
       <h3>Registrar treino de hoje</h3>
       <div id="log-exercise-list">
         ${((phase.template && phase.template[wk]) || [])
-          .map(
-            (e, i) => `
+          .map((e, i) => {
+            const lastSets = lastLoggedSetsForExercise(e.name);
+            const lastWeight = lastSets && lastSets.length ? Math.max(...lastSets.map((s) => Number(s.weight) || 0)) : null;
+            return `
           <div class="log-exercise">
             <b>${escapeHtml(e.name)}</b> <span class="muted">(alvo ${e.sets}x${e.reps})</span>
+            <a class="video-link" href="${videoSearchUrl(e.name)}" target="_blank" rel="noopener">▶️ Vídeo</a>
+            ${lastWeight ? `<p class="last-load">Última carga registrada: ${lastWeight}kg</p>` : ""}
             <div class="sets-row" data-ex-idx="${i}" data-ex-name="${escapeHtml(e.name)}">
               ${Array.from({ length: e.sets })
                 .map(
                   (_, si) => `
                 <div class="set-input">
                   <input type="number" placeholder="reps" data-set="${si}" data-field="reps" />
-                  <input type="number" placeholder="kg" data-set="${si}" data-field="weight" />
+                  <input type="number" placeholder="${lastWeight ? "kg (últ. " + lastWeight + ")" : "kg"}" data-set="${si}" data-field="weight" />
                 </div>`
                 )
                 .join("")}
             </div>
-          </div>`
-          )
+          </div>`;
+          })
           .join("") || `<p class="muted">Sem exercícios programados para hoje.</p>`}
       </div>
       <button class="btn" id="btn-save-workout">Salvar treino de hoje</button>
@@ -551,7 +629,14 @@ function goalLabel(goal) {
 }
 
 /* ---------------- PROGRESSO ---------------- */
+let selectedLoadExercise = null;
+
 function renderProgresso() {
+  const names = allLoggedExerciseNames();
+  if (!selectedLoadExercise || !names.includes(selectedLoadExercise)) {
+    selectedLoadExercise = names[names.length - 1] || null;
+  }
+
   return `
     <section class="card">
       <h2>Progresso</h2>
@@ -563,14 +648,37 @@ function renderProgresso() {
       <h3>Volume de treino (kg totais)</h3>
       <canvas id="chart-volume" width="600" height="220"></canvas>
     </section>
+    <section class="card">
+      <h3>Evolução de carga por exercício</h3>
+      ${
+        names.length
+          ? `
+        <select id="load-exercise-select">
+          ${names.map((n) => `<option value="${escapeHtml(n)}" ${n === selectedLoadExercise ? "selected" : ""}>${escapeHtml(n)}</option>`).join("")}
+        </select>
+        <canvas id="chart-load" width="600" height="220"></canvas>
+        <p id="load-trend" class="muted small"></p>`
+          : `<p class="muted">Registre treinos com peso para ver aqui se sua carga está aumentando.</p>`
+      }
+    </section>
   `;
 }
 
 function drawChartsIfNeeded() {
   const calCanvas = document.getElementById("chart-calories");
   const volCanvas = document.getElementById("chart-volume");
+  const loadCanvas = document.getElementById("chart-load");
   if (calCanvas) drawCaloriesChart(calCanvas);
   if (volCanvas) drawVolumeChart(volCanvas);
+  if (loadCanvas && selectedLoadExercise) drawLoadChart(loadCanvas, selectedLoadExercise);
+
+  const loadSelect = document.getElementById("load-exercise-select");
+  if (loadSelect) {
+    loadSelect.addEventListener("change", () => {
+      selectedLoadExercise = loadSelect.value;
+      render();
+    });
+  }
 }
 
 // Paleta do skill dataviz: series-1 azul #2a78d6 (meta), series-2 laranja #eb6834 (real)
@@ -717,6 +825,86 @@ function drawVolumeChart(canvas) {
     const label = new Date(d + "T00:00:00").toLocaleDateString("pt-BR", { weekday: "short" }).replace(".", "");
     ctx.fillText(label, x + barW / 2, h - 6);
   });
+}
+
+function drawLoadChart(canvas, exerciseName) {
+  const ctx = canvas.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth || 600;
+  const h = 220;
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  const series = maxWeightSeriesForExercise(exerciseName);
+  const trendEl = document.getElementById("load-trend");
+  if (!series.length) {
+    if (trendEl) trendEl.textContent = "";
+    return;
+  }
+
+  const values = series.map((s) => s.weight);
+  const maxVal = Math.max(...values, 1) * 1.15;
+
+  const padL = 40, padB = 24, padT = 14, padR = 14;
+  const chartW = w - padL - padR;
+  const chartH = h - padT - padB;
+
+  ctx.strokeStyle = COLOR_GRID;
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = padT + (chartH / 4) * i;
+    ctx.beginPath();
+    ctx.moveTo(padL, y);
+    ctx.lineTo(w - padR, y);
+    ctx.stroke();
+  }
+
+  const stepX = series.length > 1 ? chartW / (series.length - 1) : 0;
+  const pointX = (i) => padL + (series.length > 1 ? stepX * i : chartW / 2);
+  const pointY = (val) => padT + chartH - (val / maxVal) * chartH;
+
+  ctx.strokeStyle = COLOR_BLUE;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  series.forEach((s, i) => {
+    const x = pointX(i);
+    const y = pointY(s.weight);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  ctx.font = "10px system-ui, sans-serif";
+  series.forEach((s, i) => {
+    const x = pointX(i);
+    const y = pointY(s.weight);
+    ctx.fillStyle = COLOR_BLUE;
+    ctx.beginPath();
+    ctx.arc(x, y, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = COLOR_TEXT;
+    ctx.textAlign = "center";
+    const label = new Date(s.date + "T00:00:00").toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
+    ctx.fillText(label, x, h - 6);
+  });
+
+  if (trendEl) {
+    const first = values[0];
+    const last = values[values.length - 1];
+    const diff = round1(last - first);
+    if (values.length < 2) {
+      trendEl.innerHTML = `Primeiro registro: <b>${last}kg</b>. Continue registrando para ver a evolução.`;
+    } else if (diff > 0) {
+      trendEl.innerHTML = `<span class="trend-up">📈 +${diff}kg</span> desde o primeiro registro (${first}kg → ${last}kg)`;
+    } else if (diff < 0) {
+      trendEl.innerHTML = `<span class="trend-down">📉 ${diff}kg</span> desde o primeiro registro (${first}kg → ${last}kg)`;
+    } else {
+      trendEl.innerHTML = `➖ Carga estável em ${last}kg`;
+    }
+  }
 }
 
 /* ---------------- PERFIL ---------------- */
@@ -895,6 +1083,26 @@ function attachTreinoHandlers() {
     render();
   });
 
+  document.querySelectorAll('input[name="training-day"]').forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const checkboxes = document.querySelectorAll('input[name="training-day"]');
+      const checked = Array.from(checkboxes)
+        .filter((c) => c.checked)
+        .map((c) => c.value);
+      if (!checked.length) {
+        cb.checked = true;
+        alert("Selecione ao menos um dia de treino.");
+        return;
+      }
+      const orderedDays = WEEKDAYS.filter((w) => checked.includes(w.key)).map((w) => w.key);
+      const phase = currentPhase();
+      phase.trainingDays = orderedDays;
+      phase.template = generateSplit(phase.focus, phase.goal, orderedDays);
+      persist();
+      render();
+    });
+  });
+
   document.getElementById("btn-new-phase").addEventListener("click", () => {
     const name = prompt("Nome da nova fase (ex: Fase 2 — Foco Pernas):");
     if (!name) return;
@@ -903,6 +1111,7 @@ function attachTreinoHandlers() {
     const durationWeeks = Number(prompt("Duração em semanas:", "12")) || 12;
     const validFocus = EXERCISE_LIB[focus] ? focus : "peito";
     const validGoal = ["bulk", "cut", "manter"].includes(goal) ? goal : "bulk";
+    const trainingDays = currentPhase().trainingDays || DEFAULT_TRAINING_DAYS;
     const newPhase = {
       id: uid(),
       name,
@@ -910,7 +1119,8 @@ function attachTreinoHandlers() {
       goal: validGoal,
       startDate: todayISO(),
       durationWeeks,
-      template: generateSplit(validFocus, validGoal),
+      trainingDays,
+      template: generateSplit(validFocus, validGoal, trainingDays),
     };
     STATE.phases.push(newPhase);
     STATE.activePhaseId = newPhase.id;
