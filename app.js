@@ -513,6 +513,27 @@ const EXERCISE_LIB = {
     { name: "Abdominal + prancha", sets: 3, reps: "15-20 / 40s" },
   ],
   cardio: [{ name: "Corrida (leve a moderada)", sets: 1, reps: "20-30 min" }],
+  // Programa "Full Body A/B (iniciante)" — protocolo de hipertrofia pra iniciante
+  // ectomorfo: full body 3x/semana alternando A e B, priorizando compostos com
+  // descanso maior (90-180s) e volume moderado (10-16 séries/grupo/semana).
+  fullbody_ab_a: [
+    { name: "Agachamento livre ou smith", sets: 3, reps: "8-10", rest: "90-180s" },
+    { name: "Supino reto (barra ou halteres)", sets: 3, reps: "8-10", rest: "90-180s" },
+    { name: "Remada curvada (barra)", sets: 3, reps: "8-10", rest: "90-180s" },
+    { name: "Desenvolvimento com halteres", sets: 3, reps: "10-12" },
+    { name: "Rosca direta (barra)", sets: 2, reps: "10-12" },
+    { name: "Tríceps corda (polia)", sets: 2, reps: "10-12" },
+    { name: "Prancha abdominal", sets: 3, reps: "quase até a falha" },
+  ],
+  fullbody_ab_b: [
+    { name: "Levantamento terra (stiff ou convencional)", sets: 3, reps: "6-8", rest: "90-180s" },
+    { name: "Puxada frente (pulley)", sets: 3, reps: "8-10", rest: "90-180s" },
+    { name: "Leg press", sets: 3, reps: "10-12", rest: "90-180s" },
+    { name: "Cadeira extensora", sets: 2, reps: "12" },
+    { name: "Mesa flexora", sets: 2, reps: "12" },
+    { name: "Elevação lateral", sets: 3, reps: "12-15" },
+    { name: "Abdominal supra", sets: 3, reps: "quase até a falha" },
+  ],
 };
 
 const FOCUS_LABELS = {
@@ -521,6 +542,17 @@ const FOCUS_LABELS = {
   ombro: "Ombro / Braços",
   pernas: "Pernas / Inferior",
   fullbody: "Corpo inteiro",
+  fullbody_ab: "Full Body A/B (iniciante)",
+};
+
+const FOCUS_ICONS = {
+  peito: "🏋️",
+  costas: "🚣",
+  ombro: "🤸",
+  pernas: "🦵",
+  fullbody: "🔁",
+  fullbody_ab: "🆎",
+  cardio: "🏃",
 };
 
 const DEFAULT_TRAINING_DAYS = ["segunda", "terca", "quarta", "quinta", "sexta"];
@@ -529,9 +561,27 @@ const DEFAULT_TRAINING_DAYS = ["segunda", "terca", "quarta", "quinta", "sexta"];
 // da lista viram descanso). Domingo, quando incluído, vira cardio (fase cut) ou full body.
 function generateSplit(focus, goal, trainingDays) {
   const days = trainingDays && trainingDays.length ? trainingDays : DEFAULT_TRAINING_DAYS;
+  const week = {};
+
+  // Full Body A/B: alterna os dois treinos nos dias escolhidos, sem depender de
+  // grupo muscular secundário nem tratar domingo como caso especial — ideal com
+  // 3 dias não-consecutivos (ex: segunda/quarta/sexta) pra respeitar as 48h de
+  // descanso entre sessões que trabalham os mesmos músculos.
+  if (focus === "fullbody_ab") {
+    let toggle = 0;
+    WEEKDAYS.forEach(({ key: dayKey }) => {
+      if (!days.includes(dayKey)) {
+        week[dayKey] = [];
+        return;
+      }
+      week[dayKey] = toggle % 2 === 0 ? EXERCISE_LIB.fullbody_ab_a : EXERCISE_LIB.fullbody_ab_b;
+      toggle += 1;
+    });
+    return week;
+  }
+
   const secondaryOrder = ["peito", "costas", "ombro", "pernas"].filter((f) => f !== focus);
   const pattern = [focus, secondaryOrder[0], secondaryOrder[1], focus, secondaryOrder[2], "fullbody"];
-  const week = {};
   let patternIdx = 0;
   WEEKDAYS.forEach(({ key: dayKey }) => {
     if (!days.includes(dayKey)) {
@@ -607,6 +657,7 @@ const EXERCISE_GIF_MAP = {
   "Supino reto": "Barbell_Bench_Press_-_Medium_Grip",
   "Remada curvada": "Bent_Over_Barbell_Row",
   "Abdominal + prancha": "Crunches",
+  "Abdominal supra": "Crunches",
   "Corrida (leve a moderada)": "Running_Treadmill",
 };
 
@@ -1017,6 +1068,66 @@ function renderMealLogItem(l) {
 }
 
 /* ---------------- TREINO ---------------- */
+function renderDayAccordion(w, exs, isToday) {
+  return `
+        <details class="day-acc ${isToday ? "today" : ""}" ${isToday ? "open" : ""}>
+          <summary class="day-acc-head">
+            <span class="day-acc-name">${w.label}</span>
+            ${isToday ? `<span class="badge today">hoje</span>` : ""}
+            <span class="day-acc-count">${exs.length ? `${exs.length} exercícios` : "descanso"}</span>
+            <span class="chev">›</span>
+          </summary>
+          <div class="day-acc-body">
+            ${
+              exs.length
+                ? `<ul class="ex-rows">${exs
+                    .map(
+                      (e, i) => `
+                  <li class="ex-row">
+                    <span class="ex-num">${i + 1}</span>
+                    <span class="ex-info">
+                      <span class="ex-name">${escapeHtml(e.name)}</span>
+                      <span class="ex-meta">${e.sets}×${e.reps}${e.rest ? ` · descanso ${e.rest}` : ""}</span>
+                    </span>
+                    ${gifButtonHtml(e.name)}
+                  </li>`
+                    )
+                    .join("")}</ul>`
+                : `<p class="rest-note">😌 Dia de descanso</p>`
+            }
+          </div>
+        </details>`;
+}
+
+function renderLogExercise(e, i) {
+  const lastSets = lastLoggedSetsForExercise(e.name);
+  const lastWeight = lastSets && lastSets.length ? Math.max(...lastSets.map((s) => Number(s.weight) || 0)) : null;
+  return `
+          <div class="log-exercise">
+            <div class="log-exercise-head">
+              <span class="ex-num">${i + 1}</span>
+              <span class="ex-title">
+                <b>${escapeHtml(e.name)}</b>
+                <span class="muted small">alvo ${e.sets}×${e.reps}${e.rest ? ` · descanso ${e.rest}` : ""}</span>
+              </span>
+              ${gifButtonHtml(e.name)}
+            </div>
+            ${lastWeight ? `<span class="last-load">📊 última carga: ${lastWeight}kg</span>` : ""}
+            <div class="sets-row" data-ex-idx="${i}" data-ex-name="${escapeHtml(e.name)}">
+              ${Array.from({ length: e.sets })
+                .map(
+                  (_, si) => `
+                <div class="set-input">
+                  <span class="set-label">${si + 1}</span>
+                  <input type="number" placeholder="reps" data-set="${si}" data-field="reps" />
+                  <input type="number" placeholder="${lastWeight ? "kg (últ. " + lastWeight + ")" : "kg"}" data-set="${si}" data-field="weight" />
+                </div>`
+                )
+                .join("")}
+            </div>
+          </div>`;
+}
+
 function renderTreino() {
   const phase = currentPhase();
   const wk = todayWeekdayKey();
@@ -1031,7 +1142,19 @@ function renderTreino() {
           .map((ph) => `<option value="${ph.id}" ${ph.id === STATE.activePhaseId ? "selected" : ""}>${escapeHtml(ph.name)}</option>`)
           .join("")}
       </select>
-      <p class="muted">${FOCUS_LABELS[phase.focus] || phase.focus} · objetivo: ${goalLabel(phase.goal)} · ${phase.durationWeeks} semanas</p>
+      <p class="focus-chip"><span class="focus-ico">${FOCUS_ICONS[phase.focus] || "🏋️"}</span> ${FOCUS_LABELS[phase.focus] || phase.focus} <span class="badge accent">${goalLabel(phase.goal)}</span> <span class="muted small">${phase.durationWeeks} semanas</span></p>
+
+      <label>Foco do treino</label>
+      <select id="phase-focus-select">
+        ${Object.keys(FOCUS_LABELS)
+          .map((f) => `<option value="${f}" ${f === phase.focus ? "selected" : ""}>${FOCUS_ICONS[f] || ""} ${FOCUS_LABELS[f]}</option>`)
+          .join("")}
+      </select>
+      ${
+        phase.focus === "fullbody_ab"
+          ? `<p class="muted small coach-note">🆎 Pra esse programa funcionar como pensado, o ideal é marcar só 3 dias não-consecutivos abaixo (ex: segunda/quarta/sexta) — full body direto sem folga entre os dias não dá tempo de recuperar.</p>`
+          : ""
+      }
 
       <label>Dias de treino</label>
       <div class="weekday-picker">
@@ -1046,51 +1169,15 @@ function renderTreino() {
 
     <section class="card">
       <h3>Semana de treino</h3>
-      ${WEEKDAYS.map((w) => {
-        const exs = (phase.template && phase.template[w.key]) || [];
-        return `
-        <details ${w.key === wk ? "open" : ""}>
-          <summary>${w.label}${w.key === wk ? " (hoje)" : ""}</summary>
-          ${
-            exs.length
-              ? `<ul class="ex-list">${exs
-                  .map(
-                    (e) =>
-                      `<li>${escapeHtml(e.name)} — ${e.sets}x${e.reps} ${gifButtonHtml(e.name)}</li>`
-                  )
-                  .join("")}</ul>`
-              : `<p class="muted">Descanso</p>`
-          }
-        </details>`;
-      }).join("")}
+      <div class="day-acc-list">
+        ${WEEKDAYS.map((w) => renderDayAccordion(w, (phase.template && phase.template[w.key]) || [], w.key === wk)).join("")}
+      </div>
     </section>
 
     <section class="card">
       <h3>Registrar treino de hoje</h3>
       <div id="log-exercise-list">
-        ${((phase.template && phase.template[wk]) || [])
-          .map((e, i) => {
-            const lastSets = lastLoggedSetsForExercise(e.name);
-            const lastWeight = lastSets && lastSets.length ? Math.max(...lastSets.map((s) => Number(s.weight) || 0)) : null;
-            return `
-          <div class="log-exercise">
-            <b>${escapeHtml(e.name)}</b> <span class="muted">(alvo ${e.sets}x${e.reps})</span>
-            ${gifButtonHtml(e.name)}
-            ${lastWeight ? `<p class="last-load">Última carga registrada: ${lastWeight}kg</p>` : ""}
-            <div class="sets-row" data-ex-idx="${i}" data-ex-name="${escapeHtml(e.name)}">
-              ${Array.from({ length: e.sets })
-                .map(
-                  (_, si) => `
-                <div class="set-input">
-                  <input type="number" placeholder="reps" data-set="${si}" data-field="reps" />
-                  <input type="number" placeholder="${lastWeight ? "kg (últ. " + lastWeight + ")" : "kg"}" data-set="${si}" data-field="weight" />
-                </div>`
-                )
-                .join("")}
-            </div>
-          </div>`;
-          })
-          .join("") || `<p class="muted">Sem exercícios programados para hoje.</p>`}
+        ${((phase.template && phase.template[wk]) || []).map((e, i) => renderLogExercise(e, i)).join("") || `<p class="muted">Sem exercícios programados para hoje.</p>`}
       </div>
       <button class="btn" id="btn-save-workout">Salvar treino de hoje</button>
     </section>
@@ -1099,10 +1186,19 @@ function renderTreino() {
       <h3>Treinos registrados hoje</h3>
       ${
         todaysLogs.length
-          ? `<ul class="meal-list">${todaysLogs
+          ? `<ul class="workout-log-list">${todaysLogs
               .map(
-                (l) => `<li><div><b>${escapeHtml(l.dayLabel)}</b><br/>${l.exercises.length} exercícios · volume ${Math.round(totalVolumeForLog(l))} kg</div>
-              <button class="icon-btn" data-del-workout="${l.id}">✕</button></li>`
+                (l) => `
+              <li class="workout-log-item">
+                <div>
+                  <b>${escapeHtml(l.dayLabel)}</b>
+                  <div class="workout-log-stats">
+                    <span class="badge">${l.exercises.length} exercícios</span>
+                    <span class="badge accent">${Math.round(totalVolumeForLog(l))} kg</span>
+                  </div>
+                </div>
+                <button class="icon-btn" data-del-workout="${l.id}">✕</button>
+              </li>`
               )
               .join("")}</ul>`
           : `<p class="muted">Nenhum treino salvo hoje ainda.</p>`
@@ -1735,6 +1831,15 @@ function attachTreinoHandlers() {
     render();
   });
 
+  const focusSelect = document.getElementById("phase-focus-select");
+  focusSelect.addEventListener("change", () => {
+    const phase = currentPhase();
+    phase.focus = focusSelect.value;
+    phase.template = generateSplit(phase.focus, phase.goal, phase.trainingDays);
+    persist();
+    render();
+  });
+
   document.querySelectorAll('input[name="training-day"]').forEach((cb) => {
     cb.addEventListener("change", () => {
       const checkboxes = document.querySelectorAll('input[name="training-day"]');
@@ -1758,10 +1863,10 @@ function attachTreinoHandlers() {
   document.getElementById("btn-new-phase").addEventListener("click", () => {
     const name = prompt("Nome da nova fase (ex: Fase 2 — Foco Pernas):");
     if (!name) return;
-    const focus = (prompt("Foco muscular: peito, costas, ombro, pernas ou fullbody", "peito") || "peito").trim();
+    const focus = (prompt("Foco: peito, costas, ombro, pernas, fullbody ou fullbody_ab (Full Body A/B iniciante)", "peito") || "peito").trim();
     const goal = (prompt("Objetivo: bulk (ganho de massa), cut (definição) ou manter", "bulk") || "bulk").trim();
     const durationWeeks = Number(prompt("Duração em semanas:", "12")) || 12;
-    const validFocus = EXERCISE_LIB[focus] ? focus : "peito";
+    const validFocus = FOCUS_LABELS[focus] ? focus : "peito";
     const validGoal = ["bulk", "cut", "manter"].includes(goal) ? goal : "bulk";
     const trainingDays = currentPhase().trainingDays || DEFAULT_TRAINING_DAYS;
     const newPhase = {
