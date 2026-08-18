@@ -2002,6 +2002,27 @@ if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("service-worker.js").catch((e) => console.warn("SW falhou", e));
   });
+
+  // No iPhone, abrir pela tela de início costuma só retomar o processo
+  // suspenso em vez de recarregar a página — nenhum fetch novo acontece e o
+  // app fica preso na versão antiga. Se o app ficou em segundo plano por mais
+  // de 5 minutos, força um reload ao voltar pra buscar a versão mais nova.
+  let reloadingForUpdate = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (reloadingForUpdate) return;
+    reloadingForUpdate = true;
+    window.location.reload();
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    const last = Number(sessionStorage.getItem("lastActiveAt") || 0);
+    const now = Date.now();
+    sessionStorage.setItem("lastActiveAt", String(now));
+    if (last && now - last > 5 * 60 * 1000) {
+      window.location.reload();
+    }
+  });
 }
 
 if ("Notification" in window && Notification.permission === "granted") {
