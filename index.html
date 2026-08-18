@@ -103,6 +103,77 @@
   }
   .btn.secondary { background: var(--surface-page); color: var(--series-1); border: 1px solid var(--series-1); }
   .btn.danger { background: #d03b3b; }
+  .btn.small { width: auto; margin-top: 0; padding: 6px 10px; font-size: 0.8rem; }
+
+  .plan-list { list-style: none; margin: 10px 0 0; padding: 0; }
+  .plan-item { padding: 8px 0; border-bottom: 1px solid var(--gridline); }
+  .plan-item:last-child { border-bottom: none; }
+  .plan-item-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 0.9rem; }
+  .plan-item-head .btn.small { padding: 4px 12px; font-size: 0.95rem; line-height: 1; }
+  .plan-item p { margin: 4px 0 0; }
+  .plan-food-row { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
+  .plan-food-label { flex: 0 0 84px; font-size: 0.78rem; color: var(--text-secondary); }
+  .plan-food-row select { flex: 1; min-width: 0; font-size: 0.85rem; padding: 7px 8px; }
+  .plan-grams { white-space: nowrap; font-size: 0.85rem; min-width: 42px; text-align: right; color: var(--series-1); }
+
+  .shake-items { margin: 6px 0 0; padding-left: 18px; font-size: 0.88rem; }
+  .shake-items li { margin-bottom: 2px; }
+
+  .link-btn {
+    background: none;
+    border: none;
+    color: var(--series-1);
+    font-size: 0.82rem;
+    padding: 6px 0;
+    cursor: pointer;
+    text-decoration: underline;
+  }
+  .adjust-toggle { margin-top: 8px; text-align: left; }
+  .adjust-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 8px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: var(--surface-page);
+    font-size: 0.82rem;
+  }
+  .adjust-panel {
+    margin-top: 8px;
+    padding: 10px;
+    border-radius: 10px;
+    background: var(--surface-page);
+  }
+  .adjust-options { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
+  .adjust-options .btn.small { margin-top: 0; }
+
+  .coach-note { color: var(--good); }
+  .coach-box {
+    margin-top: 8px;
+    padding: 10px;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--good) 10%, var(--surface-page));
+    border: 1px solid color-mix(in srgb, var(--good) 30%, var(--border));
+  }
+  .coach-options { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
+  .coach-options .btn.small { margin-top: 0; }
+
+  .meal-list li.meal-log-item { display: block; padding: 10px 0; border-bottom: 1px solid var(--gridline); }
+  .meal-log-item:last-child { border-bottom: none; }
+  .meal-log-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .portion-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+  .portion-btn {
+    border: 1px solid var(--border);
+    background: var(--surface-page);
+    color: var(--text-secondary);
+    border-radius: 20px;
+    padding: 4px 10px;
+    font-size: 0.78rem;
+    cursor: pointer;
+  }
+  .portion-btn.active { background: var(--series-1); border-color: var(--series-1); color: #fff; }
 
   .progress-bar {
     height: 10px;
@@ -158,8 +229,49 @@
   .set-input { display: flex; gap: 8px; }
   .set-input input { flex: 1; }
 
-  .video-link { margin-left: 6px; color: var(--series-1); text-decoration: none; font-size: 0.85em; white-space: nowrap; }
+  .video-link {
+    margin-left: 6px;
+    color: var(--series-1);
+    text-decoration: none;
+    font-size: 0.85em;
+    white-space: nowrap;
+    background: none;
+    border: none;
+    padding: 0;
+    font-family: inherit;
+    cursor: pointer;
+  }
   .video-link:hover { text-decoration: underline; }
+
+  #gif-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    padding: 20px;
+  }
+  #gif-modal.hidden { display: none; }
+  .gif-modal-box {
+    background: var(--surface-1);
+    border-radius: var(--radius);
+    padding: 14px;
+    max-width: 360px;
+    width: 100%;
+  }
+  .gif-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .gif-modal-head h3 { margin: 0; font-size: 1rem; }
+  #gif-modal-img {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    object-fit: contain;
+    border-radius: 10px;
+    background: var(--surface-page);
+    margin-top: 10px;
+    display: block;
+  }
   .last-load { font-size: 0.8rem; color: var(--text-muted); margin: 2px 0 4px; }
   .trend-up { color: var(--good); font-weight: 600; }
   .trend-down { color: #d03b3b; font-weight: 600; }
@@ -214,6 +326,17 @@
 </head>
 <body>
   <div id="app"></div>
+
+  <div id="gif-modal" class="hidden">
+    <div class="gif-modal-box">
+      <div class="gif-modal-head">
+        <h3 id="gif-modal-title"></h3>
+        <button type="button" id="gif-modal-close" class="icon-btn">✕</button>
+      </div>
+      <img id="gif-modal-img" alt="Demonstração do exercício" />
+      <p class="muted small">Demonstração ilustrativa do movimento</p>
+    </div>
+  </div>
 
   <nav class="tabbar">
     <button class="tab-btn active" data-tab="inicio"><span class="ico">🏠</span>Início</button>
