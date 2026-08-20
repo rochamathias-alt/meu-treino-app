@@ -1,0 +1,16 @@
+name = "meu-treino-push"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Roda o handler `scheduled` todo minuto, pra checar se é hora de alguma
+# refeição e disparar a notificação push (mesmo com o app fechado).
+[triggers]
+crons = ["* * * * *"]
+
+# Guarda a inscrição de push (endpoint + chaves) e a config de horários do
+# único usuário deste app. Crie com `npx wrangler kv namespace create REMINDERS`
+# e cole o id gerado aqui embaixo.
+[[kv_namespaces]]
+binding = "REMINDERS"
+id = "3f3521dd09f94acd81bf2412355d8fdb"

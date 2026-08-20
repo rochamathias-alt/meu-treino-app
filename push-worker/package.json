@@ -1,0 +1,15 @@
+{
+  "name": "meu-treino-push",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@block65/webcrypto-web-push": "^1.0.2"
+  },
+  "devDependencies": {
+    "wrangler": "^4.124.0"
+  }
+}
