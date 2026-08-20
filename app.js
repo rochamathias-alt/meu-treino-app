@@ -1,10 +1,25 @@
 /* =======================================================================
-   Meu Treino & Dieta — lógica principal (vanilla JS, sem dependências)
+   Meu Treino — lógica principal (vanilla JS, sem dependências)
    Persistência: localStorage (o app roda 100% no navegador do usuário,
    sem servidor — por isso localStorage é apropriado aqui).
    ======================================================================= */
 
 const STORAGE_KEY = "treinoapp_state_v1";
+
+/* ---------------- Conta / login ----------------
+   Backend mínimo (Cloudflare Worker + D1, pasta auth-worker/) que guarda
+   usuários e sincroniza o STATE inteiro (perfil, fases, treinos) por
+   usuário. O app continua salvando tudo no localStorage primeiro (rápido,
+   funciona offline) e sincroniza com o servidor em segundo plano sempre que
+   algo muda ou quando a conexão volta. */
+const AUTH_API_BASE = "https://meu-treino-auth.SEU-USUARIO.workers.dev"; // TODO: trocar após publicar o auth-worker (ver auth-worker/README.md)
+const AUTH_TOKEN_KEY = "treinoapp_auth_token_v1";
+const AUTH_EMAIL_KEY = "treinoapp_auth_email_v1";
+const SYNC_KEY = "treinoapp_last_synced_at_v1";
+
+let authToken = localStorage.getItem(AUTH_TOKEN_KEY) || null;
+let authEmail = localStorage.getItem(AUTH_EMAIL_KEY) || null;
+let authMode = "login"; // login | register
 
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 const todayISO = () => new Date().toISOString().slice(0, 10);
@@ -16,19 +31,6 @@ function defaultState() {
   return {
     profile: {
       name: "",
-      sex: "M", // M / F
-      age: 25,
-      weightKg: 70,
-      heightCm: 175,
-      activity: 1.55, // fator de atividade
-      wakeTime: "07:00",
-      mealIntervalHours: 3,
-      sleepWindowHours: 16, // período acordado, para calcular quantas refeições cabem
-      trainingTime: "08:00",
-      fastedTraining: false, // se true, a 1ª refeição é agendada depois do treino, não na hora de acordar
-      adaptationMode: false, // sobe a meta calórica aos poucos em vez de já começar na meta cheia
-      adaptationStartDate: null, // ISO date de quando o modo adaptação foi ligado
-      adaptationWeeks: 2,
     },
     phases: [
       {
@@ -43,10 +45,7 @@ function defaultState() {
       },
     ],
     activePhaseId: null, // definido após criar fase 1
-    customFoods: [],
-    mealLogs: [], // {id, date, time, mealSlot, name, grams, kcal, p, c, g, fullGrams, fullKcal, fullP, fullC, fullG, portionPct, leftoverHandled}
     workoutLogs: [], // {id, date, dayLabel, exercises:[{name, sets:[{reps,weight}]}]}
-    dietAdjust: null, // {date, extraKcal} — sobra de calorias de refeições comidas parcialmente, redistribuída pro resto do dia
   };
 }
 
@@ -65,32 +64,6 @@ function loadState() {
         // Migração: fases antigas treinavam segunda-a-sábado. Passa a excluir o sábado por padrão.
         ph.trainingDays = ["segunda", "terca", "quarta", "quinta", "sexta"];
         ph.template = generateSplit(ph.focus, ph.goal, ph.trainingDays);
-        migrated = true;
-      }
-    });
-    if (state.profile && state.profile.trainingTime === undefined) {
-      state.profile.trainingTime = "08:00";
-      state.profile.fastedTraining = false;
-      migrated = true;
-    }
-    if (state.profile && state.profile.adaptationMode === undefined) {
-      state.profile.adaptationMode = false;
-      state.profile.adaptationStartDate = null;
-      state.profile.adaptationWeeks = 2;
-      migrated = true;
-    }
-    if (state.dietAdjust === undefined) {
-      state.dietAdjust = null;
-      migrated = true;
-    }
-    (state.mealLogs || []).forEach((l) => {
-      if (l.fullKcal === undefined) {
-        l.fullGrams = l.grams;
-        l.fullKcal = l.kcal;
-        l.fullP = l.p;
-        l.fullC = l.c;
-        l.fullG = l.g;
-        l.portionPct = 100;
         migrated = true;
       }
     });
@@ -117,360 +90,116 @@ function saveState(state) {
 // STATE é inicializado mais abaixo (após EXERCISE_LIB/generateSplit estarem definidos),
 // pois initFirstRun() depende dessas constantes.
 let STATE;
+let syncDebounceTimer = null;
 function persist() {
   saveState(STATE);
-}
-
-/* =======================================================================
-   CÁLCULO DE CALORIAS E MACROS (Mifflin-St Jeor)
-   ======================================================================= */
-function calcBMR(p) {
-  const base = 10 * p.weightKg + 6.25 * p.heightCm - 5 * p.age;
-  return p.sex === "M" ? base + 5 : base - 161;
-}
-
-function calcTDEE(p) {
-  return calcBMR(p) * p.activity;
-}
-
-function goalAdjustment(goal) {
-  if (goal === "bulk") return 350; // superávit moderado
-  if (goal === "cut") return -400; // déficit moderado
-  return 0;
-}
-
-// Modo adaptação: em vez de já começar na meta cheia, a meta calórica sobe
-// aos poucos (começa ~15% abaixo) ao longo de 1-2 semanas — pra quem come
-// pouco não precisar forçar volume grande logo de cara.
-const ADAPTATION_START_FACTOR = 0.85;
-function adaptationFactor(p) {
-  if (!p.adaptationMode || !p.adaptationStartDate) return 1;
-  const totalDays = clamp(p.adaptationWeeks || 2, 1, 2) * 7;
-  const start = new Date(p.adaptationStartDate + "T00:00:00");
-  const daysElapsed = Math.floor((new Date() - start) / 86400000);
-  if (daysElapsed >= totalDays || daysElapsed < 0) return 1;
-  const progress = clamp(daysElapsed / totalDays, 0, 1);
-  return ADAPTATION_START_FACTOR + (1 - ADAPTATION_START_FACTOR) * progress;
-}
-
-function calcTargets(p, goal) {
-  const tdee = calcTDEE(p);
-  const fullKcal = Math.round(tdee + goalAdjustment(goal));
-  const factor = adaptationFactor(p);
-  const kcal = Math.round(fullKcal * factor);
-  const proteinG = Math.round(p.weightKg * (goal === "cut" ? 2.2 : 2.0));
-  const fatG = Math.round((kcal * 0.25) / 9);
-  const remainingKcal = kcal - proteinG * 4 - fatG * 9;
-  const carbG = Math.max(0, Math.round(remainingKcal / 4));
-  return { kcal, proteinG, fatG, carbG, tdee: Math.round(tdee), fullKcal, adapting: factor < 1 };
+  if (authToken) {
+    if (syncDebounceTimer) clearTimeout(syncDebounceTimer);
+    syncDebounceTimer = setTimeout(pushStateToServer, 1200);
+  }
 }
 
 function currentPhase() {
   return STATE.phases.find((ph) => ph.id === STATE.activePhaseId) || STATE.phases[0];
 }
 
-/* =======================================================================
-   HORÁRIOS DE REFEIÇÃO (a cada N horas a partir do horário que acorda)
-   Em dia de treino com "treino em jejum" ativado, a 1ª refeição é empurrada
-   pra depois do treino em vez de cair bem na hora de acordar.
-   ======================================================================= */
-function mealSlots() {
-  const p = STATE.profile;
-  const [h, m] = p.wakeTime.split(":").map(Number);
-  const wakeMinutes = h * 60 + m;
-  let startMinutes = wakeMinutes;
-  let firstIsPostWorkout = false;
-
-  const isTrainingDay = (currentPhase().trainingDays || []).includes(todayWeekdayKey());
-  if (isTrainingDay && p.fastedTraining && p.trainingTime) {
-    const [th, tm] = p.trainingTime.split(":").map(Number);
-    const postWorkoutMinutes = th * 60 + tm + 60; // ~1h após o treino
-    if (postWorkoutMinutes > startMinutes) {
-      startMinutes = postWorkoutMinutes;
-      firstIsPostWorkout = true;
-    }
-  }
-
-  const slots = [];
-  let minutes = startMinutes;
-  const endMinutes = wakeMinutes + p.sleepWindowHours * 60;
-  let idx = 1;
-  while (minutes <= endMinutes) {
-    const hh = Math.floor((minutes / 60) % 24).toString().padStart(2, "0");
-    const mm = (minutes % 60).toString().padStart(2, "0");
-    slots.push({ label: `Refeição ${idx}`, time: `${hh}:${mm}`, postWorkout: idx === 1 && firstIsPostWorkout });
-    minutes += p.mealIntervalHours * 60;
-    idx += 1;
-  }
-  return slots;
-}
-
-function nextMealInfo() {
-  const slots = mealSlots();
-  const now = new Date();
-  const nowMinutes = now.getHours() * 60 + now.getMinutes();
-  for (const slot of slots) {
-    const [h, m] = slot.time.split(":").map(Number);
-    const slotMinutes = h * 60 + m;
-    if (slotMinutes >= nowMinutes) {
-      return { ...slot, diffMinutes: slotMinutes - nowMinutes };
-    }
-  }
-  // depois do último horário do dia: próxima é a primeira de amanhã
-  const first = slots[0];
-  const [h, m] = first.time.split(":").map(Number);
-  const diff = 24 * 60 - nowMinutes + h * 60 + m;
-  return { ...first, diffMinutes: diff, tomorrow: true };
-}
-
-/* =======================================================================
-   ALIMENTOS
-   ======================================================================= */
-function normalize(str) {
-  return str
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase();
-}
-
-function allFoods() {
-  return [...FOOD_DB, ...STATE.customFoods];
-}
-
-function searchFoods(query) {
-  const q = normalize(query || "");
-  if (!q) return allFoods().slice(0, 12);
-  return allFoods().filter((f) => normalize(f.name).includes(q)).slice(0, 20);
-}
-
-function computeFromGrams(food, grams) {
-  const ratio = grams / 100;
-  return {
-    kcal: round1(food.kcal * ratio),
-    p: round1(food.p * ratio),
-    c: round1(food.c * ratio),
-    g: round1(food.g * ratio),
-  };
-}
-
-function logsForDate(date) {
-  return STATE.mealLogs.filter((l) => l.date === date);
-}
-
-function dayTotals(date) {
-  const logs = logsForDate(date);
-  return logs.reduce(
-    (acc, l) => ({
-      kcal: acc.kcal + l.kcal,
-      p: acc.p + l.p,
-      c: acc.c + l.c,
-      g: acc.g + l.g,
-    }),
-    { kcal: 0, p: 0, c: 0, g: 0 }
-  );
-}
-
-function timeToMinutes(hhmm) {
-  const [h, m] = hhmm.split(":").map(Number);
-  return h * 60 + m;
-}
-
-// Calorias que sobraram de refeições comidas parcialmente hoje e que o
-// usuário escolheu redistribuir pro resto do dia (em vez de compensar com
-// shake na hora). Some do zero automaticamente quando o dia vira.
-function pendingRedistributionKcal() {
-  const adj = STATE.dietAdjust;
-  if (!adj || adj.date !== todayISO()) return 0;
-  return adj.extraKcal || 0;
-}
-
-function addDietAdjustKcal(amount) {
-  const today = todayISO();
-  const current = STATE.dietAdjust && STATE.dietAdjust.date === today ? STATE.dietAdjust.extraKcal : 0;
-  STATE.dietAdjust = { date: today, extraKcal: Math.max(0, current + amount) };
-}
-
-/* =======================================================================
-   SUGESTÃO DE CARDÁPIO — pra cada horário (vindo do Perfil), mostra quantas
-   calorias precisam ser batidas naquele horário, dividido por categoria do
-   prato (Carboidrato / Feijão / Proteína / Verdura), igual um cardápio de
-   nutricionista. O usuário escolhe o alimento de cada categoria (ou deixa
-   em branco) e o app calcula a quantidade em gramas necessária pra bater a
-   meta daquele horário. Sobra de calorias/proteína do dia é fechada com
-   whey/hipercalórico. Escolhas não são salvas entre sessões (preferência de
-   uso, não dado permanente).
-   ======================================================================= */
-const FOOD_CATEGORIES = [
-  { key: "carbo", label: "Carboidrato" },
-  { key: "leguminosa", label: "Feijão" },
-  { key: "proteina", label: "Proteína" },
-  { key: "vegetal", label: "Verdura/Legume" },
-  { key: "gordura", label: "Gordura extra" },
-];
-const DEFAULT_SLOT_TEMPLATES = {
-  breakfast: { carbo: "Pão integral", leguminosa: "", proteina: "Ovo", vegetal: "", gordura: "" },
-  main: {
-    carbo: "Arroz branco cozido",
-    leguminosa: "Feijão carioca cozido",
-    proteina: "Peito de frango grelhado",
-    vegetal: "Salada mista (folhas/legumes crus)",
-    gordura: "",
-  },
-};
-let planFoodChoices = {}; // { [slotIndex]: { carbo: foodName|"", ... } } — escolha do usuário, não persistida
-let planSlotMode = {}; // { [slotIndex]: "normal" | "dense" | "shake" } — não persistida
-let expandedAdjust = {}; // { [slotIndex]: true } — painel "ajustar refeição" aberto, não persistida
-
-// Verdura/legume é sempre uma porção fixa (tipo "salada à vontade"), não entra
-// na divisão de calorias — se entrasse, sairia tipo 500g de alface pra bater a
-// meta calórica do horário. As demais categorias dividem a caloria do horário
-// pelos pesos abaixo. No modo "denso", carbo/feijão perdem peso pra
-// proteína/gordura, que são mais calóricos por grama — mesma meta de kcal,
-// bem menos volume de comida.
-const SLOT_MODES = {
-  normal: { label: "Prato normal", shares: { carbo: 0.4, leguminosa: 0.2, proteina: 0.35, gordura: 0.05 }, vegetalGrams: 150 },
-  dense: { label: "Mais denso (menos volume)", shares: { carbo: 0.15, leguminosa: 0.1, proteina: 0.3, gordura: 0.45 }, vegetalGrams: 80 },
-};
-const DENSE_MODE_DEFAULT_FAT = "Pasta de amendoim";
-
-// Shake calórico: alternativa líquida pra bater a mesma meta de kcal de uma
-// refeição com muito menos volume pra mastigar/engolir. As gramas-base abaixo
-// são escaladas proporcionalmente pra bater a meta de kcal do horário.
-const SHAKE_COMBO_BASE = [
-  { name: "Leite integral", baseGrams: 300 },
-  { name: "Banana", baseGrams: 100 },
-  { name: "Pasta de amendoim", baseGrams: 20 },
-  { name: "Whey protein (pó)", baseGrams: 30 },
-];
-
-function computeShakeForKcal(targetKcal) {
-  const items = SHAKE_COMBO_BASE.map((c) => ({ ...c, food: allFoods().find((f) => f.name === c.name) })).filter((it) => it.food);
-  const baseKcal = items.reduce((s, it) => s + (it.food.kcal * it.baseGrams) / 100, 0);
-  const factor = baseKcal > 0 && targetKcal > 0 ? targetKcal / baseKcal : 1;
-  const macros = { kcal: 0, p: 0, c: 0, g: 0 };
-  const scaled = items.map((it) => {
-    const grams = Math.max(5, Math.round((it.baseGrams * factor) / 5) * 5);
-    const m = computeFromGrams(it.food, grams);
-    macros.kcal += m.kcal;
-    macros.p += m.p;
-    macros.c += m.c;
-    macros.g += m.g;
-    return { name: it.name, grams, macros: m };
-  });
-  return { items: scaled, macros };
-}
-
-function gramsForKcal(food, kcalTarget) {
-  if (!food || kcalTarget <= 0) return 0;
-  return Math.max(5, Math.round(((kcalTarget / food.kcal) * 100) / 5) * 5);
-}
-
-function generateMealPlan() {
-  const p = STATE.profile;
-  const phase = currentPhase();
-  const targets = calcTargets(p, phase.goal);
-  const slots = mealSlots();
-  if (!slots.length) return null;
-
-  const wheyFood = FOOD_DB.find((f) => f.name === "Whey protein (pó)");
-  const hiperFood = FOOD_DB.find((f) => f.name === "Hipercalórico (pó)");
-  let wheyServings = 1;
-  let wheyMacros = computeFromGrams(wheyFood, wheyServings * 30);
-
-  const baseSlotKcal = Math.max(0, (targets.kcal - wheyMacros.kcal) / slots.length);
-
-  // Sobra redistribuída de refeições comidas parcialmente hoje: só entra nos
-  // horários que ainda não passaram (os que já passaram já foram decididos).
-  const extraKcal = pendingRedistributionKcal();
-  const nowMinutes = new Date().getHours() * 60 + new Date().getMinutes();
-  const upcomingIdx = slots.map((s, i) => i).filter((i) => timeToMinutes(slots[i].time) >= nowMinutes);
-  const bonusPerSlot = extraKcal > 0 && upcomingIdx.length ? extraKcal / upcomingIdx.length : 0;
-
-  let mealTotals = { kcal: 0, p: 0, c: 0, g: 0 };
-  const planSlots = slots.map((slot, i) => {
-    const perSlotKcal = baseSlotKcal + (upcomingIdx.includes(i) ? bonusPerSlot : 0);
-    const mode = planSlotMode[i] || "normal";
-
-    if (mode === "shake") {
-      const shake = computeShakeForKcal(perSlotKcal);
-      mealTotals = {
-        kcal: mealTotals.kcal + shake.macros.kcal,
-        p: mealTotals.p + shake.macros.p,
-        c: mealTotals.c + shake.macros.c,
-        g: mealTotals.g + shake.macros.g,
-      };
-      return {
-        time: slot.time,
-        label: slot.label,
-        postWorkout: slot.postWorkout,
-        targetKcal: Math.round(perSlotKcal),
-        mode,
-        shake,
-        macros: shake.macros,
-      };
-    }
-
-    const modeCfg = SLOT_MODES[mode] || SLOT_MODES.normal;
-    const defaults = i === 0 ? DEFAULT_SLOT_TEMPLATES.breakfast : DEFAULT_SLOT_TEMPLATES.main;
-    const choice = planFoodChoices[i] || {};
-    const items = {};
-    FOOD_CATEGORIES.forEach((cat) => {
-      let name = choice[cat.key] !== undefined ? choice[cat.key] : defaults[cat.key];
-      if (mode === "dense" && cat.key === "gordura" && !name) name = DENSE_MODE_DEFAULT_FAT;
-      const food = name ? allFoods().find((f) => f.name === name) : null;
-      items[cat.key] = { name: name || "", food };
+/* ---------------- Sincronização com o servidor ---------------- */
+async function pushStateToServer() {
+  if (!authToken) return;
+  try {
+    const res = await fetch(`${AUTH_API_BASE}/api/state`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+      body: JSON.stringify({ state: STATE }),
     });
-    const weightSum = Object.keys(modeCfg.shares).reduce((s, key) => s + (items[key].food ? modeCfg.shares[key] : 0), 0);
+    if (res.status === 401) return handleAuthExpired();
+    if (res.ok) {
+      const data = await res.json();
+      localStorage.setItem(SYNC_KEY, String(data.updatedAt));
+    }
+  } catch (e) {
+    // Offline: fica só no localStorage por enquanto. O listener "online" logo
+    // abaixo tenta de novo assim que a conexão voltar.
+  }
+}
 
-    const macros = { kcal: 0, p: 0, c: 0, g: 0 };
-    FOOD_CATEGORIES.forEach((cat) => {
-      const entry = items[cat.key];
-      if (!entry.food) {
-        entry.grams = 0;
-        entry.macros = null;
-        return;
-      }
-      const grams =
-        cat.key === "vegetal" ? modeCfg.vegetalGrams : gramsForKcal(entry.food, weightSum ? (perSlotKcal * modeCfg.shares[cat.key]) / weightSum : 0);
-      entry.grams = grams;
-      entry.macros = computeFromGrams(entry.food, grams);
-      macros.kcal += entry.macros.kcal;
-      macros.p += entry.macros.p;
-      macros.c += entry.macros.c;
-      macros.g += entry.macros.g;
+async function pullStateFromServer() {
+  if (!authToken) return;
+  try {
+    const res = await fetch(`${AUTH_API_BASE}/api/state`, {
+      headers: { Authorization: `Bearer ${authToken}` },
     });
-    mealTotals = { kcal: mealTotals.kcal + macros.kcal, p: mealTotals.p + macros.p, c: mealTotals.c + macros.c, g: mealTotals.g + macros.g };
-
-    return { time: slot.time, label: slot.label, postWorkout: slot.postWorkout, targetKcal: Math.round(perSlotKcal), mode, items, macros };
-  });
-
-  // Whey: pelo menos 1 dose por dia (hábito relatado); 2 doses se as
-  // refeições escolhidas ainda deixarem uma boa lacuna de proteína.
-  let totals = { kcal: mealTotals.kcal + wheyMacros.kcal, p: mealTotals.p + wheyMacros.p, c: mealTotals.c + wheyMacros.c, g: mealTotals.g + wheyMacros.g };
-  if (targets.proteinG - totals.p > 30) {
-    wheyServings = 2;
-    wheyMacros = computeFromGrams(wheyFood, wheyServings * 30);
-    totals = { kcal: mealTotals.kcal + wheyMacros.kcal, p: mealTotals.p + wheyMacros.p, c: mealTotals.c + wheyMacros.c, g: mealTotals.g + wheyMacros.g };
+    if (res.status === 401) return handleAuthExpired();
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.state) {
+      STATE = data.state;
+      saveState(STATE);
+      localStorage.setItem(SYNC_KEY, String(data.updatedAt || Date.now()));
+    }
+  } catch (e) {
+    // Offline: segue com o que já está salvo localmente.
   }
+}
 
-  // Hipercalórico fecha o restante das calorias do dia.
-  let hiper = null;
-  const gapKcal = targets.kcal - totals.kcal;
-  if (gapKcal > 50) {
-    const grams = Math.min(300, Math.max(20, Math.round(((gapKcal / hiperFood.kcal) * 100) / 5) * 5));
-    const macros = computeFromGrams(hiperFood, grams);
-    hiper = { name: hiperFood.name, grams, macros, splitAdvised: grams > 150 };
-    totals = { kcal: totals.kcal + macros.kcal, p: totals.p + macros.p, c: totals.c + macros.c, g: totals.g + macros.g };
+// No boot com sessão já ativa: puxa o servidor em segundo plano e só troca o
+// estado local se o servidor tiver algo mais novo que a última sincronização
+// (evita sobrescrever uma edição feita agora mesmo, offline, neste aparelho).
+async function syncOnBoot() {
+  if (!authToken) return;
+  try {
+    const res = await fetch(`${AUTH_API_BASE}/api/state`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    if (res.status === 401) return handleAuthExpired();
+    if (!res.ok) return;
+    const data = await res.json();
+    const lastSynced = Number(localStorage.getItem(SYNC_KEY) || 0);
+    if (data.state && data.updatedAt && data.updatedAt > lastSynced) {
+      STATE = data.state;
+      saveState(STATE);
+      localStorage.setItem(SYNC_KEY, String(data.updatedAt));
+      render();
+    }
+  } catch (e) {
+    // Offline no boot: segue com o cache local.
   }
+}
 
-  return {
-    targets,
-    slots: planSlots,
-    whey: { name: wheyFood.name, grams: wheyServings * 30, servings: wheyServings, macros: wheyMacros },
-    hiper,
-    totals,
-    redistributedKcal: Math.round(extraKcal),
-  };
+async function onAuthSuccess(data, isNewAccount) {
+  authToken = data.token;
+  authEmail = data.email;
+  localStorage.setItem(AUTH_TOKEN_KEY, authToken);
+  localStorage.setItem(AUTH_EMAIL_KEY, authEmail);
+
+  if (isNewAccount) {
+    // Conta nova: migra pro servidor o que já estava salvo neste aparelho.
+    await pushStateToServer();
+  } else {
+    await pullStateFromServer();
+  }
+  activeTab = "inicio";
+  render();
+}
+
+function handleAuthExpired() {
+  logout();
+}
+
+function logout() {
+  authToken = null;
+  authEmail = null;
+  localStorage.removeItem(AUTH_TOKEN_KEY);
+  localStorage.removeItem(AUTH_EMAIL_KEY);
+  localStorage.removeItem(SYNC_KEY);
+  // Limpa o cache local dos dados de treino: evita que a próxima conta a
+  // logar neste aparelho veja, mesmo que por um instante, os dados da conta
+  // anterior antes da sincronização com o servidor.
+  localStorage.removeItem(STORAGE_KEY);
+  STATE = defaultState();
+  authMode = "login";
+  activeTab = "inicio";
+  render();
 }
 
 /* =======================================================================
@@ -731,38 +460,6 @@ function maxWeightSeriesForExercise(name) {
 }
 
 /* =======================================================================
-   NOTIFICAÇÕES (melhor esforço — enquanto o app está aberto)
-   iOS só entrega notificações em segundo plano via Web Push com servidor;
-   aqui usamos a API local, que funciona com o app aberto/em primeiro plano.
-   ======================================================================= */
-let notifTimer = null;
-function scheduleNextMealNotification() {
-  if (notifTimer) clearTimeout(notifTimer);
-  if (!("Notification" in window) || Notification.permission !== "granted") return;
-  const info = nextMealInfo();
-  const ms = clamp(info.diffMinutes * 60 * 1000, 1000, 6 * 60 * 60 * 1000);
-  notifTimer = setTimeout(() => {
-    try {
-      new Notification("Hora de comer! 🍽️", {
-        body: `${info.label} às ${info.time}. Registre sua refeição no app.`,
-        icon: "icons/icon-192.png",
-      });
-    } catch (e) {
-      console.warn("Notificação falhou", e);
-    }
-    scheduleNextMealNotification();
-  }, ms);
-}
-
-function requestNotificationPermission() {
-  if (!("Notification" in window)) return Promise.resolve("unsupported");
-  return Notification.requestPermission().then((perm) => {
-    if (perm === "granted") scheduleNextMealNotification();
-    return perm;
-  });
-}
-
-/* =======================================================================
    RENDERIZAÇÃO — navegação por abas
    ======================================================================= */
 const APP_EL = document.getElementById("app");
@@ -775,9 +472,17 @@ function setTab(tab) {
 }
 
 function render() {
+  const nav = document.querySelector("nav.tabbar");
+  if (!authToken) {
+    nav.classList.add("hidden");
+    APP_EL.innerHTML = renderAuth();
+    attachHandlers();
+    return;
+  }
+  nav.classList.remove("hidden");
+
   let html = "";
   if (activeTab === "inicio") html = renderInicio();
-  else if (activeTab === "alimentacao") html = renderAlimentacao();
   else if (activeTab === "treino") html = renderTreino();
   else if (activeTab === "progresso") html = renderProgresso();
   else if (activeTab === "perfil") html = renderPerfil();
@@ -785,16 +490,85 @@ function render() {
   attachHandlers();
 }
 
+/* ---------------- Login / criar conta ---------------- */
+function renderAuth() {
+  const isRegister = authMode === "register";
+  return `
+    <section class="card">
+      <h2>${isRegister ? "Criar conta" : "Entrar"}</h2>
+      <p class="muted">Seus treinos ficam salvos na sua conta e sincronizam entre aparelhos.</p>
+
+      <label>E-mail</label>
+      <input type="email" id="auth-email" autocomplete="username" />
+
+      <label>Senha</label>
+      <input type="password" id="auth-password" autocomplete="${isRegister ? "new-password" : "current-password"}" />
+
+      ${
+        isRegister
+          ? `<label>Confirmar senha</label><input type="password" id="auth-password-confirm" autocomplete="new-password" />`
+          : ""
+      }
+
+      <p id="auth-error" class="muted small hidden" style="color:#d03b3b;"></p>
+
+      <button class="btn" id="btn-auth-submit">${isRegister ? "Criar conta" : "Entrar"}</button>
+      <button class="btn secondary" id="btn-auth-toggle">${isRegister ? "Já tenho conta" : "Criar conta nova"}</button>
+    </section>
+  `;
+}
+
+function attachAuthHandlers() {
+  document.getElementById("btn-auth-toggle").addEventListener("click", () => {
+    authMode = authMode === "register" ? "login" : "register";
+    render();
+  });
+
+  document.getElementById("btn-auth-submit").addEventListener("click", async () => {
+    const email = document.getElementById("auth-email").value.trim();
+    const password = document.getElementById("auth-password").value;
+    const errEl = document.getElementById("auth-error");
+    errEl.classList.add("hidden");
+
+    if (!email || !password) {
+      errEl.textContent = "Preencha e-mail e senha.";
+      errEl.classList.remove("hidden");
+      return;
+    }
+    if (authMode === "register") {
+      const confirmPassword = document.getElementById("auth-password-confirm").value;
+      if (password !== confirmPassword) {
+        errEl.textContent = "As senhas não coincidem.";
+        errEl.classList.remove("hidden");
+        return;
+      }
+    }
+
+    const btn = document.getElementById("btn-auth-submit");
+    btn.disabled = true;
+    try {
+      const path = authMode === "register" ? "/api/register" : "/api/login";
+      const res = await fetch(`${AUTH_API_BASE}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Não foi possível continuar.");
+      await onAuthSuccess(data, authMode === "register");
+    } catch (e) {
+      errEl.textContent = e instanceof TypeError ? "Erro de conexão. Verifique a internet e tente de novo." : e.message;
+      errEl.classList.remove("hidden");
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+
 /* ---------------- INÍCIO ---------------- */
 function renderInicio() {
   const p = STATE.profile;
   const phase = currentPhase();
-  const targets = calcTargets(p, phase.goal);
-  const totals = dayTotals(todayISO());
-  const pct = clamp(Math.round((totals.kcal / targets.kcal) * 100), 0, 999);
-  const next = nextMealInfo();
-  const hh = Math.floor(next.diffMinutes / 60);
-  const mm = next.diffMinutes % 60;
   const wk = todayWeekdayKey();
   const todaysWorkout = (phase.template && phase.template[wk]) || [];
 
@@ -802,24 +576,6 @@ function renderInicio() {
     <section class="card">
       <h2>Olá${p.name ? ", " + escapeHtml(p.name) : ""} 👋</h2>
       <p class="muted">${new Date().toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" })}</p>
-    </section>
-
-    <section class="card highlight">
-      <h3>Próxima refeição</h3>
-      <p class="big">${next.label} — ${next.time}${next.tomorrow ? " (amanhã)" : ""}</p>
-      <p class="muted">em ${hh}h${mm.toString().padStart(2, "0")}min</p>
-      <button class="btn" id="btn-enable-notif">🔔 Ativar lembretes</button>
-    </section>
-
-    <section class="card">
-      <h3>Calorias hoje</h3>
-      <div class="progress-bar"><div class="progress-fill" style="width:${clamp(pct, 0, 100)}%"></div></div>
-      <p>${Math.round(totals.kcal)} / ${targets.kcal} kcal (${pct}%)</p>
-      <div class="macro-row">
-        <span>P: ${round1(totals.p)}g / ${targets.proteinG}g</span>
-        <span>C: ${round1(totals.c)}g / ${targets.carbG}g</span>
-        <span>G: ${round1(totals.g)}g / ${targets.fatG}g</span>
-      </div>
     </section>
 
     <section class="card">
@@ -838,233 +594,6 @@ function renderInicio() {
       <button class="btn" data-goto="treino">Ir para Treino</button>
     </section>
   `;
-}
-
-/* ---------------- ALIMENTAÇÃO ---------------- */
-let lastMealPlan = null;
-
-function foodSelectOptions(selected, group) {
-  const foods = [...allFoods()]
-    .filter((f) => !group || f.group === group)
-    .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
-  const opts = [`<option value="" ${selected === "" ? "selected" : ""}>— nenhum —</option>`];
-  foods.forEach((f) => {
-    opts.push(`<option value="${escapeHtml(f.name)}" ${selected === f.name ? "selected" : ""}>${escapeHtml(f.name)}</option>`);
-  });
-  return opts.join("");
-}
-
-function renderPlanSlotBody(s, i) {
-  if (s.mode === "shake") {
-    return `
-      <p class="muted small">🥤 Shake calórico — bate a mesma meta com bem menos volume.</p>
-      <ul class="shake-items">
-        ${s.shake.items.map((it) => `<li>${escapeHtml(it.name)} — <b>${it.grams}g</b> <span class="muted">(${Math.round(it.macros.kcal)} kcal)</span></li>`).join("")}
-      </ul>
-    `;
-  }
-  return FOOD_CATEGORIES.map((cat) => {
-    const item = s.items[cat.key];
-    return `
-    <div class="plan-food-row">
-      <span class="plan-food-label">${cat.label}</span>
-      <select data-plan-food="${i}-${cat.key}">${foodSelectOptions(item.name, cat.key)}</select>
-      ${item.grams ? `<b class="plan-grams">${item.grams}g</b>` : ""}
-    </div>`;
-  }).join("");
-}
-
-function renderPlanSlotAdjust(s, i) {
-  if (s.mode === "dense" || s.mode === "shake") {
-    const modeLabel = s.mode === "dense" ? "Prato mais denso" : "Shake calórico";
-    return `
-      <div class="adjust-banner">
-        <span>🎯 Ajustado pra menos volume: <b>${modeLabel}</b></span>
-        <button type="button" class="link-btn" data-slot-mode="${i}-normal">voltar ao prato normal</button>
-      </div>
-    `;
-  }
-  if (expandedAdjust[i]) {
-    return `
-      <div class="adjust-panel">
-        <p class="muted small">Sem problema! Duas formas de bater a mesma meta de kcal com menos comida:</p>
-        <div class="adjust-options">
-          <button type="button" class="btn secondary small" data-slot-mode="${i}-dense">🥑 Prato mais denso</button>
-          <button type="button" class="btn secondary small" data-slot-mode="${i}-shake">🥤 Shake calórico</button>
-        </div>
-        <button type="button" class="link-btn" data-adjust-toggle="${i}">fechar</button>
-      </div>
-    `;
-  }
-  return `<button type="button" class="link-btn adjust-toggle" data-adjust-toggle="${i}">Não estou conseguindo comer tudo? Ajustar essa refeição</button>`;
-}
-
-function renderMealPlanCard(plan) {
-  return `
-    <section class="card highlight">
-      <h3>O que comer hoje</h3>
-      <p class="muted small">Monte o prato de cada horário por categoria — a grama pra bater a caloria é calculada sozinha.</p>
-      ${
-        plan.redistributedKcal > 0
-          ? `<p class="muted small coach-note">↻ Redistribuindo ${plan.redistributedKcal} kcal que sobraram de refeições anteriores nos próximos horários de hoje.</p>`
-          : ""
-      }
-      <ul class="plan-list">
-        ${plan.slots
-          .map(
-            (s, i) => `
-          <li class="plan-item">
-            <div class="plan-item-head">
-              <span><b>${s.time}</b>${s.postWorkout ? " (pós-treino)" : ""} · ${s.targetKcal} kcal</span>
-              <button type="button" class="btn secondary small" data-log-plan="${i}">+</button>
-            </div>
-            ${renderPlanSlotBody(s, i)}
-            ${renderPlanSlotAdjust(s, i)}
-          </li>`
-          )
-          .join("")}
-        <li class="plan-item">
-          <div class="plan-item-head">
-            <span><b>Whey</b> · ${plan.whey.servings}x/dia</span>
-            <button type="button" class="btn secondary small" data-log-plan="whey">+</button>
-          </div>
-          <p class="muted small">${plan.whey.grams}g no total</p>
-        </li>
-        ${
-          plan.hiper
-            ? `
-        <li class="plan-item">
-          <div class="plan-item-head">
-            <span><b>Hipercalórico</b> · completa a meta</span>
-            <button type="button" class="btn secondary small" data-log-plan="hiper">+</button>
-          </div>
-          <p class="muted small">${plan.hiper.grams}g${plan.hiper.splitAdvised ? " — divida em 2 doses no dia" : ""}</p>
-        </li>`
-            : ""
-        }
-      </ul>
-      <p class="muted small">+ Creatina 5g/dia junto de qualquer refeição.</p>
-      <div class="macro-row">
-        <span><b>${Math.round(plan.totals.kcal)}</b> / ${plan.targets.kcal} kcal</span>
-        <span>P ${round1(plan.totals.p)}g / ${plan.targets.proteinG}g</span>
-      </div>
-    </section>
-  `;
-}
-
-function renderAlimentacao() {
-  const date = todayISO();
-  const logs = logsForDate(date).sort((a, b) => a.time.localeCompare(b.time));
-  const totals = dayTotals(date);
-  const phase = currentPhase();
-  const targets = calcTargets(STATE.profile, phase.goal);
-  const plan = generateMealPlan();
-  lastMealPlan = plan;
-
-  return `
-    <section class="card">
-      <h2>Diário alimentar</h2>
-      <p class="muted">${new Date().toLocaleDateString("pt-BR")}</p>
-      ${
-        targets.adapting
-          ? `<p class="muted small coach-note">🌱 Modo adaptação ativo — hoje sua meta é ${targets.kcal} kcal, subindo aos poucos até ${targets.fullKcal} kcal.</p>`
-          : ""
-      }
-      <div class="macro-row">
-        <span><b>${Math.round(totals.kcal)}</b> / ${targets.kcal} kcal</span>
-        <span>P ${round1(totals.p)}g</span>
-        <span>C ${round1(totals.c)}g</span>
-        <span>G ${round1(totals.g)}g</span>
-      </div>
-    </section>
-
-    ${plan ? renderMealPlanCard(plan, phase) : ""}
-
-    <section class="card">
-      <h3>Adicionar alimento</h3>
-      <input type="text" id="food-search" placeholder="Buscar alimento (ex: arroz, frango...)" autocomplete="off" />
-      <div id="food-results" class="food-results"></div>
-      <div id="food-add-form" class="hidden">
-        <p id="food-selected-name" class="muted"></p>
-        <input type="number" id="food-grams" placeholder="Gramas (ex: 100)" value="100" min="1" />
-        <select id="food-meal-slot">
-          ${mealSlots()
-            .map((s) => `<option value="${s.label}">${s.label} (${s.time})</option>`)
-            .join("")}
-        </select>
-        <button class="btn" id="btn-confirm-add-food">Adicionar</button>
-      </div>
-      <details class="custom-food-details">
-        <summary>Cadastrar alimento personalizado</summary>
-        <input type="text" id="cf-name" placeholder="Nome do alimento" />
-        <select id="cf-group">
-          <option value="carbo">Carboidrato</option>
-          <option value="leguminosa">Feijão</option>
-          <option value="proteina">Proteína</option>
-          <option value="vegetal">Verdura/Legume</option>
-          <option value="fruta">Fruta</option>
-          <option value="laticinio">Laticínio</option>
-          <option value="gordura">Gordura/Oleaginosa</option>
-          <option value="suplemento">Suplemento</option>
-        </select>
-        <div class="grid4">
-          <input type="number" id="cf-kcal" placeholder="kcal/100g" />
-          <input type="number" id="cf-p" placeholder="Proteína/100g" />
-          <input type="number" id="cf-c" placeholder="Carbo/100g" />
-          <input type="number" id="cf-g" placeholder="Gordura/100g" />
-        </div>
-        <button class="btn secondary" id="btn-add-custom-food">Salvar alimento</button>
-      </details>
-    </section>
-
-    <section class="card">
-      <h3>Refeições de hoje</h3>
-      ${
-        logs.length
-          ? `<ul class="meal-list">${logs.map((l) => renderMealLogItem(l)).join("")}</ul>`
-          : `<p class="muted">Nenhuma refeição registrada ainda.</p>`
-      }
-    </section>
-  `;
-}
-
-const PORTION_STEPS = [25, 50, 75, 100];
-
-function renderMealLogItem(l) {
-  const leftoverKcal = round1((l.fullKcal || l.kcal) - l.kcal);
-  const showCoach = l.portionPct < 100 && !l.leftoverHandled && leftoverKcal > 20;
-  return `
-    <li class="meal-log-item">
-      <div class="meal-log-row">
-        <div>
-          <b>${escapeHtml(l.mealSlot)}</b> · ${l.time}<br/>
-          ${escapeHtml(l.name)} — ${l.grams}g
-        </div>
-        <div class="meal-kcal">
-          ${Math.round(l.kcal)} kcal
-          <button class="icon-btn" data-del-meal="${l.id}">✕</button>
-        </div>
-      </div>
-      <div class="portion-row">
-        <span class="muted small">Comi:</span>
-        ${PORTION_STEPS.map(
-          (pct) => `<button type="button" class="portion-btn ${l.portionPct === pct ? "active" : ""}" data-portion-id="${l.id}" data-portion-pct="${pct}">${pct}%</button>`
-        ).join("")}
-      </div>
-      ${
-        showCoach
-          ? `
-      <div class="coach-box">
-        <p class="muted small">Tudo bem, sobraram ~${Math.round(leftoverKcal)} kcal dessa refeição. Quer:</p>
-        <div class="coach-options">
-          <button type="button" class="btn secondary small" data-compensate-leftover="${l.id}">🥤 Compensar com shake agora</button>
-          <button type="button" class="btn secondary small" data-redistribute-leftover="${l.id}">↻ Redistribuir no resto do dia</button>
-        </div>
-        <button type="button" class="link-btn" data-dismiss-leftover="${l.id}">deixar assim</button>
-      </div>`
-          : ""
-      }
-    </li>`;
 }
 
 /* ---------------- TREINO ---------------- */
@@ -1224,10 +753,6 @@ function renderProgresso() {
     <section class="card">
       <h2>Progresso</h2>
       <p class="muted">Últimos 7 dias</p>
-      <canvas id="chart-calories" width="600" height="220"></canvas>
-      <div id="calories-legend" class="legend"></div>
-    </section>
-    <section class="card">
       <h3>Volume de treino (kg totais)</h3>
       <canvas id="chart-volume" width="600" height="220"></canvas>
     </section>
@@ -1248,10 +773,8 @@ function renderProgresso() {
 }
 
 function drawChartsIfNeeded() {
-  const calCanvas = document.getElementById("chart-calories");
   const volCanvas = document.getElementById("chart-volume");
   const loadCanvas = document.getElementById("chart-load");
-  if (calCanvas) drawCaloriesChart(calCanvas);
   if (volCanvas) drawVolumeChart(volCanvas);
   if (loadCanvas && selectedLoadExercise) drawLoadChart(loadCanvas, selectedLoadExercise);
 
@@ -1264,10 +787,8 @@ function drawChartsIfNeeded() {
   }
 }
 
-// Paleta do skill dataviz: series-1 azul #2a78d6 (meta), series-2 laranja #eb6834 (real)
+// Paleta do skill dataviz: series-1 azul #2a78d6
 const COLOR_BLUE = "#2a78d6";
-const COLOR_ORANGE = "#eb6834";
-const COLOR_MUTED = "#898781";
 const COLOR_GRID = "#e1e0d9";
 const COLOR_TEXT = "#52514e";
 
@@ -1279,81 +800,6 @@ function last7Dates() {
     arr.push(d.toISOString().slice(0, 10));
   }
   return arr;
-}
-
-function drawCaloriesChart(canvas) {
-  const ctx = canvas.getContext("2d");
-  const dpr = window.devicePixelRatio || 1;
-  const w = canvas.clientWidth || 600;
-  const h = 220;
-  canvas.width = w * dpr;
-  canvas.height = h * dpr;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, w, h);
-
-  const dates = last7Dates();
-  const phase = currentPhase();
-  const targets = calcTargets(STATE.profile, phase.goal);
-  const values = dates.map((d) => dayTotals(d).kcal);
-  const maxVal = Math.max(targets.kcal * 1.2, ...values, 100);
-
-  const padL = 40, padB = 24, padT = 10, padR = 10;
-  const chartW = w - padL - padR;
-  const chartH = h - padT - padB;
-
-  // grid + eixo
-  ctx.strokeStyle = COLOR_GRID;
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 4; i++) {
-    const y = padT + (chartH / 4) * i;
-    ctx.beginPath();
-    ctx.moveTo(padL, y);
-    ctx.lineTo(w - padR, y);
-    ctx.stroke();
-  }
-
-  // linha de meta (azul)
-  const goalY = padT + chartH - (targets.kcal / maxVal) * chartH;
-  ctx.strokeStyle = COLOR_BLUE;
-  ctx.setLineDash([4, 4]);
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(padL, goalY);
-  ctx.lineTo(w - padR, goalY);
-  ctx.stroke();
-  ctx.setLineDash([]);
-
-  // barras (laranja) — consumo real
-  const barW = (chartW / dates.length) * 0.5;
-  dates.forEach((d, i) => {
-    const x = padL + (chartW / dates.length) * i + (chartW / dates.length - barW) / 2;
-    const val = values[i];
-    const barH = (val / maxVal) * chartH;
-    const y = padT + chartH - barH;
-    ctx.fillStyle = COLOR_ORANGE;
-    const r = 4;
-    ctx.beginPath();
-    ctx.moveTo(x, y + barH);
-    ctx.lineTo(x, y + r);
-    ctx.quadraticCurveTo(x, y, x + r, y);
-    ctx.lineTo(x + barW - r, y);
-    ctx.quadraticCurveTo(x + barW, y, x + barW, y + r);
-    ctx.lineTo(x + barW, y + barH);
-    ctx.closePath();
-    ctx.fill();
-
-    // label eixo x
-    ctx.fillStyle = COLOR_TEXT;
-    ctx.font = "11px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    const label = new Date(d + "T00:00:00").toLocaleDateString("pt-BR", { weekday: "short" }).replace(".", "");
-    ctx.fillText(label, x + barW / 2, h - 6);
-  });
-
-  document.getElementById("calories-legend").innerHTML = `
-    <span class="legend-item"><i style="background:${COLOR_ORANGE}"></i>Consumido</span>
-    <span class="legend-item"><i style="background:${COLOR_BLUE}"></i>Meta (${targets.kcal} kcal)</span>
-  `;
 }
 
 function drawVolumeChart(canvas) {
@@ -1493,97 +939,26 @@ function drawLoadChart(canvas, exerciseName) {
 /* ---------------- PERFIL ---------------- */
 function renderPerfil() {
   const p = STATE.profile;
-  const phase = currentPhase();
-  const targets = calcTargets(p, phase.goal);
 
   return `
     <section class="card">
       <h2>Perfil</h2>
+      ${authEmail ? `<p class="muted small">Conectado como <b>${escapeHtml(authEmail)}</b></p>` : ""}
       <label>Nome</label>
       <input type="text" id="pf-name" value="${escapeHtml(p.name)}" />
 
-      <label>Sexo</label>
-      <select id="pf-sex">
-        <option value="M" ${p.sex === "M" ? "selected" : ""}>Masculino</option>
-        <option value="F" ${p.sex === "F" ? "selected" : ""}>Feminino</option>
-      </select>
-
-      <label>Idade</label>
-      <input type="number" id="pf-age" value="${p.age}" />
-
-      <label>Peso (kg)</label>
-      <input type="number" id="pf-weight" value="${p.weightKg}" step="0.1" />
-
-      <label>Altura (cm)</label>
-      <input type="number" id="pf-height" value="${p.heightCm}" />
-
-      <label>Nível de atividade</label>
-      <select id="pf-activity">
-        <option value="1.2" ${p.activity == 1.2 ? "selected" : ""}>Sedentário</option>
-        <option value="1.375" ${p.activity == 1.375 ? "selected" : ""}>Leve (1-3x/semana)</option>
-        <option value="1.55" ${p.activity == 1.55 ? "selected" : ""}>Moderado (3-5x/semana)</option>
-        <option value="1.725" ${p.activity == 1.725 ? "selected" : ""}>Alto (6-7x/semana)</option>
-        <option value="1.9" ${p.activity == 1.9 ? "selected" : ""}>Muito alto (atleta)</option>
-      </select>
-
-      <label>Horário que acorda</label>
-      <input type="time" id="pf-wake" value="${p.wakeTime}" />
-
-      <label>Intervalo entre refeições (horas)</label>
-      <input type="number" id="pf-interval" value="${p.mealIntervalHours}" min="1" max="6" />
-
-      <label>Horas acordado por dia</label>
-      <input type="number" id="pf-sleepwindow" value="${p.sleepWindowHours}" min="8" max="20" />
-
-      <label>Horário do treino</label>
-      <input type="time" id="pf-training-time" value="${p.trainingTime}" />
-
-      <label style="display:flex; align-items:center; gap:8px; margin-top:14px;">
-        <input type="checkbox" id="pf-fasted" ${p.fastedTraining ? "checked" : ""} style="width:auto;" />
-        Treino em jejum (sem comer antes)
-      </label>
-      <p class="muted small">Treinar em jejum é seguro pra ganho de massa — o que mais importa é bater a caloria e a proteína do dia. Com essa opção, sua 1ª refeição na aba Dieta é agendada pra ~1h depois do treino, nos dias de treino.</p>
-
-      <label style="display:flex; align-items:center; gap:8px; margin-top:14px;">
-        <input type="checkbox" id="pf-adaptation" ${p.adaptationMode ? "checked" : ""} style="width:auto;" />
-        Modo adaptação (subir a meta calórica aos poucos)
-      </label>
-      <select id="pf-adaptation-weeks">
-        <option value="1" ${p.adaptationWeeks === 1 ? "selected" : ""}>Subir ao longo de 1 semana</option>
-        <option value="2" ${p.adaptationWeeks === 2 ? "selected" : ""}>Subir ao longo de 2 semanas</option>
-      </select>
-      <p class="muted small">Pra quem tem dificuldade de comer o volume da meta cheia logo de cara: em vez de começar direto em ${targets.fullKcal} kcal, a meta começa ~15% abaixo e sobe aos poucos até a meta cheia. Dá tempo do estômago se acostumar sem forçar.${
-        p.adaptationMode && p.adaptationStartDate
-          ? ` Em andamento desde ${new Date(p.adaptationStartDate + "T00:00:00").toLocaleDateString("pt-BR")}.`
-          : ""
-      }</p>
-      ${p.adaptationMode && p.adaptationStartDate ? `<button type="button" class="link-btn" id="btn-restart-adaptation">reiniciar do começo</button>` : ""}
-
       <button class="btn" id="btn-save-profile">Salvar perfil</button>
-    </section>
-
-    <section class="card highlight">
-      <h3>Suas metas calculadas (fase atual: ${goalLabel(phase.goal)})</h3>
-      <p>TDEE (gasto estimado): <b>${targets.tdee} kcal</b></p>
-      <p>Meta calórica: <b>${targets.kcal} kcal/dia</b>${targets.adapting ? ` <span class="muted small">(subindo até ${targets.fullKcal} kcal)</span>` : ""}</p>
-      <div class="macro-row">
-        <span>Proteína: ${targets.proteinG}g</span>
-        <span>Carboidrato: ${targets.carbG}g</span>
-        <span>Gordura: ${targets.fatG}g</span>
-      </div>
-      <p class="muted small">Cálculo por Mifflin-St Jeor + fator de atividade. Ajuste conforme seus resultados reais ao longo das semanas.</p>
-    </section>
-
-    <section class="card">
-      <h3>Notificações de refeição</h3>
-      <p class="muted small">No iPhone, lembretes funcionam com o app aberto (instalado na Tela de Início). Notificações em segundo plano exigiriam um servidor de push — pode ser adicionado depois se você quiser.</p>
-      <button class="btn secondary" id="btn-enable-notif-2">🔔 Ativar lembretes</button>
     </section>
 
     <section class="card">
       <h3>Dados</h3>
       <button class="btn secondary" id="btn-export">Exportar backup (JSON)</button>
       <button class="btn danger" id="btn-reset">Apagar todos os dados</button>
+    </section>
+
+    <section class="card">
+      <h3>Conta</h3>
+      <button class="btn secondary" id="btn-logout">Sair</button>
     </section>
   `;
 }
@@ -1595,232 +970,19 @@ function escapeHtml(str) {
 /* =======================================================================
    HANDLERS
    ======================================================================= */
-let selectedFood = null;
-
-// Registra uma refeição já comida a 100% — os campos full* guardam a
-// quantidade original servida, pra permitir marcar depois "comi só metade"
-// sem perder a referência do que foi oferecido.
-function pushMealLog({ mealSlot, name, grams, macros }) {
-  STATE.mealLogs.push({
-    id: uid(),
-    date: todayISO(),
-    time: new Date().toTimeString().slice(0, 5),
-    mealSlot,
-    name,
-    grams,
-    kcal: macros.kcal,
-    p: macros.p,
-    c: macros.c,
-    g: macros.g,
-    fullGrams: grams,
-    fullKcal: macros.kcal,
-    fullP: macros.p,
-    fullC: macros.c,
-    fullG: macros.g,
-    portionPct: 100,
-    leftoverHandled: false,
-  });
-}
-
 function attachHandlers() {
+  if (!authToken) {
+    attachAuthHandlers();
+    return;
+  }
+
   document.querySelectorAll("[data-goto]").forEach((el) => {
     el.addEventListener("click", () => setTab(el.dataset.goto));
   });
 
-  const notifBtns = [document.getElementById("btn-enable-notif"), document.getElementById("btn-enable-notif-2")];
-  notifBtns.forEach((btn) => {
-    if (btn) btn.addEventListener("click", () => requestNotificationPermission());
-  });
-
-  if (activeTab === "alimentacao") attachAlimentacaoHandlers();
   if (activeTab === "treino") attachTreinoHandlers();
   if (activeTab === "perfil") attachPerfilHandlers();
   if (activeTab === "progresso") drawChartsIfNeeded();
-}
-
-function attachAlimentacaoHandlers() {
-  const search = document.getElementById("food-search");
-  const results = document.getElementById("food-results");
-  const addForm = document.getElementById("food-add-form");
-  const selectedName = document.getElementById("food-selected-name");
-
-  search.addEventListener("input", () => {
-    const matches = searchFoods(search.value);
-    results.innerHTML = matches
-      .map((f) => `<div class="food-result-item" data-food-name="${escapeHtml(f.name)}">${escapeHtml(f.name)} <span class="muted">(${f.kcal} kcal/100g)</span></div>`)
-      .join("");
-  });
-  results.innerHTML = searchFoods("")
-    .map((f) => `<div class="food-result-item" data-food-name="${escapeHtml(f.name)}">${escapeHtml(f.name)} <span class="muted">(${f.kcal} kcal/100g)</span></div>`)
-    .join("");
-
-  results.addEventListener("click", (e) => {
-    const item = e.target.closest(".food-result-item");
-    if (!item) return;
-    const name = item.dataset.foodName;
-    selectedFood = allFoods().find((f) => f.name === name);
-    if (!selectedFood) return;
-    selectedName.textContent = `Selecionado: ${selectedFood.name}`;
-    addForm.classList.remove("hidden");
-  });
-
-  const confirmBtn = document.getElementById("btn-confirm-add-food");
-  confirmBtn.addEventListener("click", () => {
-    if (!selectedFood) return;
-    const grams = Number(document.getElementById("food-grams").value) || 0;
-    if (grams <= 0) return;
-    const mealSlot = document.getElementById("food-meal-slot").value;
-    const macros = computeFromGrams(selectedFood, grams);
-    pushMealLog({ mealSlot, name: selectedFood.name, grams, macros });
-    persist();
-    selectedFood = null;
-    render();
-  });
-
-  const addCustomBtn = document.getElementById("btn-add-custom-food");
-  addCustomBtn.addEventListener("click", () => {
-    const name = document.getElementById("cf-name").value.trim();
-    const group = document.getElementById("cf-group").value;
-    const kcal = Number(document.getElementById("cf-kcal").value);
-    const p = Number(document.getElementById("cf-p").value) || 0;
-    const c = Number(document.getElementById("cf-c").value) || 0;
-    const g = Number(document.getElementById("cf-g").value) || 0;
-    if (!name || !kcal) return;
-    STATE.customFoods.push({ name, kcal, p, c, g, group });
-    persist();
-    render();
-  });
-
-  document.querySelectorAll("[data-del-meal]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      STATE.mealLogs = STATE.mealLogs.filter((l) => l.id !== btn.dataset.delMeal);
-      persist();
-      render();
-    });
-  });
-
-  document.querySelectorAll("[data-log-plan]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      if (!lastMealPlan) return;
-      const key = btn.dataset.logPlan;
-      let mealSlot, name, grams, macros;
-      if (key === "whey") {
-        mealSlot = "Suplemento";
-        name = `${lastMealPlan.whey.name} — ${lastMealPlan.whey.grams}g`;
-        grams = lastMealPlan.whey.grams;
-        macros = lastMealPlan.whey.macros;
-      } else if (key === "hiper") {
-        if (!lastMealPlan.hiper) return;
-        mealSlot = "Suplemento";
-        name = `${lastMealPlan.hiper.name} — ${lastMealPlan.hiper.grams}g`;
-        grams = lastMealPlan.hiper.grams;
-        macros = lastMealPlan.hiper.macros;
-      } else {
-        const slot = lastMealPlan.slots[Number(key)];
-        if (!slot) return;
-        if (slot.mode === "shake") {
-          if (!slot.shake.items.length) return;
-          mealSlot = slot.label;
-          name = slot.shake.items.map((it) => `${it.name} ${it.grams}g`).join(" + ");
-          grams = slot.shake.items.reduce((s, it) => s + it.grams, 0);
-          macros = slot.macros;
-        } else {
-          const items = FOOD_CATEGORIES.map((cat) => slot.items[cat.key]).filter((it) => it.food);
-          if (!items.length) return;
-          mealSlot = slot.label;
-          name = items.map((it) => `${it.name} ${it.grams}g`).join(" + ");
-          grams = items.reduce((s, it) => s + it.grams, 0);
-          macros = slot.macros;
-        }
-      }
-      pushMealLog({ mealSlot, name, grams, macros });
-      persist();
-      render();
-    });
-  });
-
-  document.querySelectorAll("[data-plan-food]").forEach((sel) => {
-    sel.addEventListener("change", () => {
-      const [slotIdx, component] = sel.dataset.planFood.split("-");
-      planFoodChoices[slotIdx] = { ...planFoodChoices[slotIdx], [component]: sel.value };
-      render();
-    });
-  });
-
-  document.querySelectorAll("[data-adjust-toggle]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const idx = btn.dataset.adjustToggle;
-      expandedAdjust[idx] = !expandedAdjust[idx];
-      render();
-    });
-  });
-
-  document.querySelectorAll("[data-slot-mode]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const [idx, mode] = btn.dataset.slotMode.split("-");
-      if (mode === "normal") delete planSlotMode[idx];
-      else planSlotMode[idx] = mode;
-      expandedAdjust[idx] = false;
-      render();
-    });
-  });
-
-  document.querySelectorAll("[data-portion-id]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const log = STATE.mealLogs.find((l) => l.id === btn.dataset.portionId);
-      if (!log) return;
-      const pct = Number(btn.dataset.portionPct);
-      const ratio = pct / 100;
-      log.portionPct = pct;
-      log.grams = round1(log.fullGrams * ratio);
-      log.kcal = round1(log.fullKcal * ratio);
-      log.p = round1(log.fullP * ratio);
-      log.c = round1(log.fullC * ratio);
-      log.g = round1(log.fullG * ratio);
-      if (pct === 100) log.leftoverHandled = false;
-      persist();
-      render();
-    });
-  });
-
-  document.querySelectorAll("[data-compensate-leftover]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const log = STATE.mealLogs.find((l) => l.id === btn.dataset.compensateLeftover);
-      if (!log) return;
-      const leftoverKcal = round1(log.fullKcal - log.kcal);
-      if (leftoverKcal > 0) {
-        const shake = computeShakeForKcal(leftoverKcal);
-        const name = shake.items.map((it) => `${it.name} ${it.grams}g`).join(" + ");
-        const grams = shake.items.reduce((s, it) => s + it.grams, 0);
-        pushMealLog({ mealSlot: "Shake (compensação)", name, grams, macros: shake.macros });
-      }
-      log.leftoverHandled = true;
-      persist();
-      render();
-    });
-  });
-
-  document.querySelectorAll("[data-redistribute-leftover]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const log = STATE.mealLogs.find((l) => l.id === btn.dataset.redistributeLeftover);
-      if (!log) return;
-      const leftoverKcal = round1(log.fullKcal - log.kcal);
-      if (leftoverKcal > 0) addDietAdjustKcal(leftoverKcal);
-      log.leftoverHandled = true;
-      persist();
-      render();
-    });
-  });
-
-  document.querySelectorAll("[data-dismiss-leftover]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const log = STATE.mealLogs.find((l) => l.id === btn.dataset.dismissLeftover);
-      if (!log) return;
-      log.leftoverHandled = true;
-      persist();
-      render();
-    });
-  });
 }
 
 function attachTreinoHandlers() {
@@ -1927,38 +1089,14 @@ function attachTreinoHandlers() {
 
 function attachPerfilHandlers() {
   document.getElementById("btn-save-profile").addEventListener("click", () => {
-    const adaptationMode = document.getElementById("pf-adaptation").checked;
     STATE.profile = {
       ...STATE.profile,
       name: document.getElementById("pf-name").value.trim(),
-      sex: document.getElementById("pf-sex").value,
-      age: Number(document.getElementById("pf-age").value) || STATE.profile.age,
-      weightKg: Number(document.getElementById("pf-weight").value) || STATE.profile.weightKg,
-      heightCm: Number(document.getElementById("pf-height").value) || STATE.profile.heightCm,
-      activity: Number(document.getElementById("pf-activity").value),
-      wakeTime: document.getElementById("pf-wake").value || STATE.profile.wakeTime,
-      mealIntervalHours: Number(document.getElementById("pf-interval").value) || STATE.profile.mealIntervalHours,
-      sleepWindowHours: Number(document.getElementById("pf-sleepwindow").value) || STATE.profile.sleepWindowHours,
-      trainingTime: document.getElementById("pf-training-time").value || STATE.profile.trainingTime,
-      fastedTraining: document.getElementById("pf-fasted").checked,
-      adaptationMode,
-      adaptationWeeks: Number(document.getElementById("pf-adaptation-weeks").value) || STATE.profile.adaptationWeeks,
-      adaptationStartDate: adaptationMode ? STATE.profile.adaptationStartDate || todayISO() : STATE.profile.adaptationStartDate,
     };
     persist();
-    scheduleNextMealNotification();
     render();
     alert("Perfil salvo!");
   });
-
-  const restartBtn = document.getElementById("btn-restart-adaptation");
-  if (restartBtn) {
-    restartBtn.addEventListener("click", () => {
-      STATE.profile.adaptationStartDate = todayISO();
-      persist();
-      render();
-    });
-  }
 
   document.getElementById("btn-export").addEventListener("click", () => {
     const blob = new Blob([JSON.stringify(STATE, null, 2)], { type: "application/json" });
@@ -1974,7 +1112,13 @@ function attachPerfilHandlers() {
     if (!confirm("Tem certeza? Isso vai apagar todos os dados salvos no app.")) return;
     localStorage.removeItem(STORAGE_KEY);
     STATE = initFirstRun();
+    if (authToken) pushStateToServer();
     render();
+  });
+
+  document.getElementById("btn-logout").addEventListener("click", () => {
+    if (!confirm("Sair da conta?")) return;
+    logout();
   });
 }
 
@@ -1996,6 +1140,10 @@ document.body.addEventListener("click", (e) => {
   if (e.target.closest("#gif-modal-close") || e.target.id === "gif-modal") {
     closeGifModal();
   }
+});
+
+window.addEventListener("online", () => {
+  if (authToken) pushStateToServer();
 });
 
 if ("serviceWorker" in navigator) {
@@ -2025,8 +1173,5 @@ if ("serviceWorker" in navigator) {
   });
 }
 
-if ("Notification" in window && Notification.permission === "granted") {
-  scheduleNextMealNotification();
-}
-
 render();
+if (authToken) syncOnBoot();

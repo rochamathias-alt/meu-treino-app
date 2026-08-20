@@ -1,8 +1,18 @@
-# Meu Treino & Dieta — App (PWA)
+# Meu Treino — App (PWA)
 
 Este é um app web que você instala direto no seu iPhone sem passar pela App Store.
-Não usa nenhum servidor: todos os seus dados (perfil, refeições, treinos) ficam
-salvos só no seu celular (no navegador).
+Agora tem login com e-mail e senha: seus dados (perfil, treinos) ficam
+salvos numa conta e sincronizam entre aparelhos — veja o Passo 0 antes de
+hospedar o app.
+
+## Passo 0 — Publicar o backend de login (uma vez só)
+
+O login usa um pequeno backend (Cloudflare Worker + banco de dados),
+guardado na pasta `auth-worker/`. Siga `auth-worker/README.md` pra publicar
+— ao final você recebe uma URL tipo
+`https://meu-treino-auth.SEU-USUARIO.workers.dev`. Cole essa URL na
+constante `AUTH_API_BASE`, no topo do arquivo `app.js`, antes de seguir pro
+Passo 1.
 
 ## Passo 1 — Colocar o app "no ar" (hospedar)
 
@@ -12,7 +22,7 @@ uma opção (as duas são gratuitas):
 ### Opção A — GitHub Pages (recomendado, gratuito e permanente)
 1. Crie uma conta em https://github.com (se ainda não tiver).
 2. Crie um novo repositório (ex: `meu-treino-app`), público.
-3. Faça upload de TODOS os arquivos desta pasta (index.html, app.js, foods.js,
+3. Faça upload de TODOS os arquivos desta pasta (index.html, app.js,
    manifest.json, service-worker.js e a pasta icons/) para esse repositório
    (pelo site do GitHub: "Add file" → "Upload files").
 4. Vá em Settings → Pages → Source → selecione a branch `main` e pasta `/root`.
@@ -34,33 +44,23 @@ uma opção (as duas são gratuitas):
 4. Pronto! Um ícone do app aparece na tela inicial, abre em tela cheia, como
    um app normal — e não veio da App Store.
 
-## Sobre lembretes de refeição
-
-O app calcula os horários das refeições a cada 3 horas a partir do horário
-que você acorda (editável em Perfil). Ele tenta mandar notificação enquanto
-está aberto/em segundo plano recente. Notificações confiáveis mesmo com o
-app fechado no iPhone exigiriam um servidor de "push" — se você quiser isso
-no futuro, dá pra evoluir o app com um backend simples.
-
 ## Resumo do que o app faz
 
-- **Início**: próxima refeição, resumo de calorias do dia, treino de hoje.
-- **Dieta**: registra o que você comeu (busca por alimento + gramas, calcula
-  calorias/macros automaticamente), com banco de +50 alimentos comuns e opção
-  de cadastrar alimentos personalizados.
+- **Login**: cria conta com e-mail e senha (ou entra numa já existente) antes
+  de usar o app. Os dados ficam salvos numa conta e sincronizam sozinhos
+  entre aparelhos — ainda funciona offline, salvando local e enviando pro
+  servidor quando a internet voltar.
+- **Início**: saudação e treino de hoje.
 - **Treino**: fases de treino (ex: 3 meses focado em peito/superior, depois
   outra fase focada em outro grupo), com treino de segunda a sexta focado no
   grupo escolhido + treino de corpo inteiro no sábado + corrida automática
   nas fases de definição. Você registra séries, repetições e carga de cada
   treino.
-- **Progresso**: gráficos de calorias consumidas vs. meta e volume de treino
-  nos últimos 7 dias.
-- **Perfil**: seus dados (peso, altura, idade, sexo, atividade) calculam
-  automaticamente sua meta calórica e de macros (proteína/carbo/gordura),
-  ajustada conforme o objetivo da fase (ganho de massa ou definição).
+- **Progresso**: gráficos de volume de treino e evolução de carga por
+  exercício nos últimos 7 dias.
+- **Perfil**: seu nome e backup/reset dos dados salvos.
 
 ## Editar depois
 
-Todo o código está em `app.js` (lógica), `index.html` (visual) e `foods.js`
-(banco de alimentos). Pode me pedir para ajustar qualquer parte — exercícios,
-alimentos, cores, cálculo de calorias, etc.
+Todo o código está em `app.js` (lógica) e `index.html` (visual). Pode me
+pedir para ajustar qualquer parte — exercícios, cores, etc.

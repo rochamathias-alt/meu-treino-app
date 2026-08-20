@@ -1,0 +1,12 @@
+name = "meu-treino-auth"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+
+# Guarda os usuários (email + senha com hash) e o estado do app (perfil,
+# fases, treinos registrados) de cada um. Crie com
+# `npx wrangler d1 create treino-auth-db` e cole o database_id gerado aqui
+# embaixo (troque o placeholder).
+[[d1_databases]]
+binding = "DB"
+database_name = "treino-auth-db"
+database_id = "COLE_AQUI_O_DATABASE_ID"

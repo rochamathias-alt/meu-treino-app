@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
-<title>Meu Treino & Dieta</title>
+<title>Meu Treino</title>
 <meta name="theme-color" content="#2a78d6" />
 <link rel="manifest" href="manifest.json" />
 <link rel="apple-touch-icon" href="icons/icon-192.png" />
@@ -92,7 +92,6 @@
   h3 { margin: 0 0 10px; font-size: 1.05rem; }
   .muted { color: var(--text-secondary); }
   .muted.small { font-size: 0.82rem; color: var(--text-muted); }
-  .big { font-size: 1.4rem; font-weight: 600; margin: 4px 0; }
 
   label { display: block; margin: 10px 0 4px; font-size: 0.85rem; color: var(--text-secondary); }
   input, select {
@@ -104,7 +103,6 @@
     color: var(--text-primary);
     font-size: 1rem;
   }
-  .grid4 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 
   .btn {
     display: inline-block;
@@ -123,86 +121,7 @@
   .btn.danger { background: #d03b3b; }
   .btn.small { width: auto; margin-top: 0; padding: 6px 10px; font-size: 0.8rem; }
 
-  .plan-list { list-style: none; margin: 10px 0 0; padding: 0; }
-  .plan-item { padding: 8px 0; border-bottom: 1px solid var(--gridline); }
-  .plan-item:last-child { border-bottom: none; }
-  .plan-item-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 0.9rem; }
-  .plan-item-head .btn.small { padding: 4px 12px; font-size: 0.95rem; line-height: 1; }
-  .plan-item p { margin: 4px 0 0; }
-  .plan-food-row { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
-  .plan-food-label { flex: 0 0 84px; font-size: 0.78rem; color: var(--text-secondary); }
-  .plan-food-row select { flex: 1; min-width: 0; font-size: 0.85rem; padding: 7px 8px; }
-  .plan-grams { white-space: nowrap; font-size: 0.85rem; min-width: 42px; text-align: right; color: var(--series-1); }
-
-  .shake-items { margin: 6px 0 0; padding-left: 18px; font-size: 0.88rem; }
-  .shake-items li { margin-bottom: 2px; }
-
-  .link-btn {
-    background: none;
-    border: none;
-    color: var(--series-1);
-    font-size: 0.82rem;
-    padding: 6px 0;
-    cursor: pointer;
-    text-decoration: underline;
-  }
-  .adjust-toggle { margin-top: 8px; text-align: left; }
-  .adjust-banner {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    margin-top: 8px;
-    padding: 8px 10px;
-    border-radius: 10px;
-    background: var(--surface-page);
-    font-size: 0.82rem;
-  }
-  .adjust-panel {
-    margin-top: 8px;
-    padding: 10px;
-    border-radius: 10px;
-    background: var(--surface-page);
-  }
-  .adjust-options { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
-  .adjust-options .btn.small { margin-top: 0; }
-
   .coach-note { color: var(--good); }
-  .coach-box {
-    margin-top: 8px;
-    padding: 10px;
-    border-radius: 10px;
-    background: color-mix(in srgb, var(--good) 10%, var(--surface-page));
-    border: 1px solid color-mix(in srgb, var(--good) 30%, var(--border));
-  }
-  .coach-options { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
-  .coach-options .btn.small { margin-top: 0; }
-
-  .meal-list li.meal-log-item { display: block; padding: 10px 0; border-bottom: 1px solid var(--gridline); }
-  .meal-log-item:last-child { border-bottom: none; }
-  .meal-log-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-  .portion-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
-  .portion-btn {
-    border: 1px solid var(--border);
-    background: var(--surface-page);
-    color: var(--text-secondary);
-    border-radius: 20px;
-    padding: 4px 10px;
-    font-size: 0.78rem;
-    cursor: pointer;
-  }
-  .portion-btn.active { background: var(--series-1); border-color: var(--series-1); color: #fff; }
-
-  .progress-bar {
-    height: 10px;
-    background: var(--gridline);
-    border-radius: 6px;
-    overflow: hidden;
-    margin: 8px 0;
-  }
-  .progress-fill { height: 100%; background: var(--series-1); border-radius: 6px; transition: width .3s; }
-
-  .macro-row { display: flex; gap: 12px; flex-wrap: wrap; font-size: 0.88rem; color: var(--text-secondary); margin-top: 4px; }
 
   .ex-list { margin: 6px 0 0; padding-left: 18px; }
   .ex-list li { margin-bottom: 4px; }
@@ -270,32 +189,11 @@
   .workout-log-item:last-child { border-bottom: none; }
   .workout-log-stats { display: flex; gap: 6px; margin-top: 6px; }
 
-  .food-results { max-height: 220px; overflow-y: auto; margin-top: 8px; border-radius: 10px; }
-  .food-result-item {
-    padding: 10px 8px;
-    border-bottom: 1px solid var(--gridline);
-    cursor: pointer;
-  }
-  .food-result-item:hover { background: var(--surface-page); }
-  #food-add-form { margin-top: 10px; }
-  #food-add-form.hidden { display: none; }
   .hidden { display: none; }
 
   details { margin-bottom: 8px; border-bottom: 1px solid var(--gridline); padding-bottom: 8px; }
   summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
 
-  .custom-food-details { margin-top: 14px; border-top: 1px solid var(--gridline); padding-top: 10px; }
-
-  .meal-list { list-style: none; margin: 0; padding: 0; }
-  .meal-list li {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 10px 0;
-    border-bottom: 1px solid var(--gridline);
-    gap: 8px;
-  }
-  .meal-kcal { display: flex; align-items: center; gap: 8px; font-weight: 600; white-space: nowrap; }
   .icon-btn {
     background: none;
     border: none;
@@ -417,10 +315,6 @@
   }
   .weekday-picker input { width: auto; accent-color: var(--series-1); }
 
-  .legend { display: flex; gap: 16px; margin-top: 8px; font-size: 0.85rem; color: var(--text-secondary); }
-  .legend-item { display: flex; align-items: center; gap: 6px; }
-  .legend-item i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
-
   canvas { width: 100%; height: 220px; display: block; }
 
   nav.tabbar {
@@ -447,6 +341,7 @@
   }
   .tab-btn .ico { font-size: 1.25rem; }
   .tab-btn.active { color: var(--series-1); }
+  nav.tabbar.hidden { display: none; }
 </style>
 </head>
 <body>
@@ -465,13 +360,11 @@
 
   <nav class="tabbar">
     <button class="tab-btn active" data-tab="inicio"><span class="ico">🏠</span>Início</button>
-    <button class="tab-btn" data-tab="alimentacao"><span class="ico">🍽️</span>Dieta</button>
     <button class="tab-btn" data-tab="treino"><span class="ico">💪</span>Treino</button>
     <button class="tab-btn" data-tab="progresso"><span class="ico">📈</span>Progresso</button>
     <button class="tab-btn" data-tab="perfil"><span class="ico">⚙️</span>Perfil</button>
   </nav>
 
-  <script src="foods.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

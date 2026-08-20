@@ -1,0 +1,13 @@
+{
+  "name": "meu-treino-auth",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:init": "wrangler d1 execute treino-auth-db --remote --file=./schema.sql"
+  },
+  "devDependencies": {
+    "wrangler": "^4.124.0"
+  }
+}
