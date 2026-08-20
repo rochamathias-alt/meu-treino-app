@@ -12,7 +12,7 @@ const STORAGE_KEY = "treinoapp_state_v1";
    usuário. O app continua salvando tudo no localStorage primeiro (rápido,
    funciona offline) e sincroniza com o servidor em segundo plano sempre que
    algo muda ou quando a conexão volta. */
-const AUTH_API_BASE = "https://meu-treino-auth.SEU-USUARIO.workers.dev"; // TODO: trocar após publicar o auth-worker (ver auth-worker/README.md)
+const AUTH_API_BASE = "https://meu-treino-auth.rochamathias.workers.dev";
 const AUTH_TOKEN_KEY = "treinoapp_auth_token_v1";
 const AUTH_EMAIL_KEY = "treinoapp_auth_email_v1";
 const SYNC_KEY = "treinoapp_last_synced_at_v1";

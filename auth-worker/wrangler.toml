@@ -9,4 +9,4 @@ compatibility_date = "2024-11-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "treino-auth-db"
-database_id = "COLE_AQUI_O_DATABASE_ID"
+database_id = "23facd9e-6442-4f34-a7cb-da0687b15fbb"
