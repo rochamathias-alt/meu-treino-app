@@ -1,4 +1,4 @@
-const CACHE_NAME = "treino-app-v3";
+const CACHE_NAME = "treino-app-v4";
 
 // Arquivos principais: sempre busca a versão mais nova da rede primeiro (só
 // cai pro cache se estiver offline). Assim, depois de publicar uma
@@ -38,7 +38,10 @@ self.addEventListener("fetch", (event) => {
 
   if (isNetworkFirst(event.request)) {
     event.respondWith(
-      fetch(event.request)
+      // "no-store" ignora o Cache-Control do GitHub Pages (max-age=600): sem
+      // isso, "rede primeiro" podia devolver uma resposta velha do cache
+      // HTTP do navegador em vez de ir buscar a versão nova de verdade.
+      fetch(event.request, { cache: "no-store" })
         .then((networkResponse) => {
           if (networkResponse && networkResponse.status === 200) {
             const clone = networkResponse.clone();
